@@ -126,6 +126,74 @@ if uploaded_file:
             search_number = int(search_input)
             df_display = df_display[df_display['Ticket Number'] == search_number]
 
+                # SR vs Incident count table
+        st.subheader("📊 Summary Counts")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col2:
+            st.markdown("**🔹 SR vs Incident Count**")
+            type_summary = df_filtered['Type'].value_counts().rename_axis('Type').reset_index(name='Count')
+            type_total = pd.DataFrame([{'Type': 'Total', 'Count': type_summary['Count'].sum()}])
+            type_df = pd.concat([type_summary, type_total], ignore_index=True)
+
+            st.dataframe(
+                type_df.style.apply(
+                    lambda x: ['background-color: #cce5ff; font-weight: bold' if x.name == len(type_df)-1 else '' for _ in x],
+                    axis=1
+                )
+            )
+
+        with col1:
+            st.markdown("**🔸 Triage Status Count**")
+            triage_summary = df_filtered['Status'].value_counts().rename_axis('Triage Status').reset_index(name='Count')
+            triage_summary = triage_summary[triage_summary['Triage Status'].isin(['Pending SR/Incident', 'Not Triaged'])]
+            triage_total = pd.DataFrame([{'Triage Status': 'Total', 'Count': triage_summary['Count'].sum()}])
+            triage_df = pd.concat([triage_summary, triage_total], ignore_index=True)
+
+            st.dataframe(
+                triage_df.style.apply(
+                    lambda x: ['background-color: #cce5ff; font-weight: bold' if x.name == len(triage_df)-1 else '' for _ in x],
+                    axis=1
+                )
+            )
+
+        with col3:
+            st.markdown("**🟢 SR Status Summary (All & Unique)**")
+            if sr_status_file and 'SR Status' in df_filtered.columns and 'Ticket Number' in df_filtered.columns:
+                # Drop rows where SR Status is NaN
+                df_status_valid = df_filtered.dropna(subset=['SR Status'])
+
+                # All SR status count
+                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='All SR Count')
+
+                # Unique SRs
+                sr_unique = df_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'SR Status']].drop_duplicates()
+                sr_unique_counts = sr_unique['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='Unique SR Count')
+
+                # Merge both summaries
+                merged_sr = pd.merge(sr_all_counts, sr_unique_counts, on='SR Status', how='outer').fillna(0)
+                merged_sr[['All SR Count', 'Unique SR Count']] = merged_sr[['All SR Count', 'Unique SR Count']].astype(int)
+
+                # Total row
+                total_row = pd.DataFrame([{
+                    'SR Status': 'Total',
+                    'All SR Count': merged_sr['All SR Count'].sum(),
+                    'Unique SR Count': merged_sr['Unique SR Count'].sum()
+                }])
+
+                sr_summary_df = pd.concat([merged_sr, total_row], ignore_index=True)
+
+                # Display
+                st.dataframe(
+                    sr_summary_df.style.apply(
+                        lambda x: ['background-color: #cce5ff; font-weight: bold' if x.name == len(sr_summary_df)-1 else '' for _ in x],
+                        axis=1
+                    )
+                )
+            else:
+                st.info("Upload SR Status file to view this summary.")
+
         # Display filtered results
         st.subheader("📋 Filtered Results")
         st.markdown(f"**Total Filtered Rows:** {df_display.shape[0]}")
