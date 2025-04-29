@@ -477,7 +477,7 @@ else:
                 )
         
         # Display data table with important columns
-        important_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
+        important_cols = ['Last Note','Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
