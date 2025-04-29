@@ -4,13 +4,8 @@ import numpy as np
 import re
 import io
 import base64
-import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import time
 from streamlit_option_menu import option_menu
-import calendar
 
 # Set page configuration
 st.set_page_config(
@@ -74,30 +69,8 @@ def set_custom_theme():
         color: #888;
         margin: 0;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: white;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1e88e5 !important;
-        color: white !important;
-    }
     h1, h2, h3 {
         color: #1565c0;
-    }
-    .stProgress .st-eb {
-        background-color: #bbdefb;
-    }
-    .stProgress .st-ec {
-        background-color: #1976d2;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -117,7 +90,7 @@ if 'last_upload_time' not in st.session_state:
     st.session_state.last_upload_time = None
 if 'selected_users' not in st.session_state:
     st.session_state.selected_users = []
-# New session state for tracked rows
+# Session state for tracked rows
 if 'tracked_rows' not in st.session_state:
     st.session_state.tracked_rows = []
 
@@ -192,16 +165,6 @@ def generate_excel_download(data):
     output.seek(0)
     return output
 
-# Function to create Streamlit metrics card
-def metric_card(title, value, delta=None, delta_label=None, icon=None):
-    st.markdown(f"""
-    <div class="card">
-        <p class="metric-label">{title}</p>
-        <p class="metric-value">{value}</p>
-        {f'<p style="color: {"green" if delta >= 0 else "red"};">{delta_label}: {delta}%</p>' if delta is not None else ''}
-    </div>
-    """, unsafe_allow_html=True)
-
 # Function to handle row selection for tracking
 def track_row(row_data):
     case_id = row_data['Case Id']
@@ -246,6 +209,37 @@ with st.sidebar:
         st.info(f"Last upload: {st.session_state.last_upload_time}")
     
     st.markdown("---")
+    
+    # Filters section
+    if st.session_state.data_loaded:
+        st.subheader("🔍 Filters")
+        
+        # Get all users
+        df_main = st.session_state.main_df.copy()
+        all_users = df_main['Current User Id'].dropna().unique().tolist()
+        
+        # Multi-select for users
+        default_users = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa']
+        default_users = [u for u in default_users if u in all_users]  # Ensure defaults exist
+        
+        selected_users = st.multiselect(
+            "Select Users", 
+            options=all_users,
+            default=default_users
+        )
+        st.session_state.selected_users = selected_users
+        
+        # Date range filter
+        if 'Case Start Date' in df_main.columns:
+            min_date = df_main['Case Start Date'].min().date()
+            max_date = df_main['Case Start Date'].max().date()
+            
+            date_range = st.date_input(
+                "Date Range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
 
 # Main content
 if not st.session_state.data_loaded:
@@ -258,27 +252,36 @@ if not st.session_state.data_loaded:
     To get started:
     1. Upload your main Excel file using the sidebar
     2. Optionally upload SR status file for enhanced analysis
-    3. Use the dashboard to filter, analyze and export your data
+    3. Use the application to analyze and export your data
     
     **Features:**
     - Advanced filtering and search
-    - Visual analytics and charts
-    - Team performance metrics
-    - Track unresolved SRs in a dedicated tab
-    - Export capabilities
+    - Detailed SR Analysis
+    - Track unresolved SRs
     """)
-    
-    # Sample UI image could be added here
-    st.image("https://via.placeholder.com/800x400.png?text=SR+Analyzer+Pro+Dashboard+Preview", use_column_width=True)
 else:
     # Process and filter data
     df_main = st.session_state.main_df.copy()
     
+    # Apply user filters
+    if st.session_state.selected_users:
+        df_filtered = df_main[df_main['Current User Id'].isin(st.session_state.selected_users)].copy()
+    else:
+        df_filtered = df_main.copy()
+    
+    # Apply date filter if date range is selected
+    if 'Case Start Date' in df_filtered.columns and 'date_range' in locals():
+        start_date, end_date = date_range
+        df_filtered = df_filtered[
+            (df_filtered['Case Start Date'].dt.date >= start_date) & 
+            (df_filtered['Case Start Date'].dt.date <= end_date)
+        ]
+    
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["Dashboard", "SR Analysis", "Not Resolved SR", "Team Performance", "Settings"],
-        icons=["speedometer2", "kanban", "clipboard-check", "people", "gear"],
+        options=["SR Analysis", "Not Resolved SR"],
+        icons=["kanban", "clipboard-check"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -334,49 +337,6 @@ else:
         
         return df_enriched
     
-    # Apply user filters and enrichment
-    with st.sidebar:
-        st.subheader("🔍 Filters")
-        
-        # Get all users
-        all_users = df_main['Current User Id'].dropna().unique().tolist()
-        
-        # Multi-select for users
-        default_users = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa']
-        default_users = [u for u in default_users if u in all_users]  # Ensure defaults exist
-        
-        selected_users = st.multiselect(
-            "Select Users", 
-            options=all_users,
-            default=default_users
-        )
-        st.session_state.selected_users = selected_users
-        
-        # Apply filters
-        if selected_users:
-            df_filtered = df_main[df_main['Current User Id'].isin(selected_users)].copy()
-        else:
-            df_filtered = df_main.copy()
-        
-        # Date range filter
-        if 'Case Start Date' in df_filtered.columns:
-            min_date = df_filtered['Case Start Date'].min().date()
-            max_date = df_filtered['Case Start Date'].max().date()
-            
-            date_range = st.date_input(
-                "Date Range",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date
-            )
-            
-            if len(date_range) == 2:
-                start_date, end_date = date_range
-                df_filtered = df_filtered[
-                    (df_filtered['Case Start Date'].dt.date >= start_date) & 
-                    (df_filtered['Case Start Date'].dt.date <= end_date)
-                ]
-    
     # Enrich data with classifications and metrics
     df_enriched = enrich_data(df_filtered)
     
@@ -384,185 +344,10 @@ else:
     st.session_state.filtered_df = df_enriched
     
     #
-    # DASHBOARD TAB
-    #
-    if selected == "Dashboard":
-        st.title("📊 Executive Dashboard")
-        
-        # Display last update time
-        st.markdown(f"**Last data update:** {st.session_state.last_upload_time}")
-        
-        # Top metrics row
-        total_cases = len(df_enriched)
-        sr_count = len(df_enriched[df_enriched['Type'] == 'SR'])
-        incident_count = len(df_enriched[df_enriched['Type'] == 'Incident'])
-        not_triaged = len(df_enriched[df_enriched['Status'] == 'Not Triaged'])
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            metric_card("Total Cases", total_cases)
-        
-        with col2:
-            metric_card("Service Requests", sr_count)
-        
-        with col3:
-            metric_card("Incidents", incident_count)
-        
-        with col4:
-            metric_card("Not Triaged", not_triaged)
-        
-        # SR Status Overview Chart
-        st.subheader("📈 SR Status Overview")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # Create status data if SR status data is available
-            if 'SR Status' in df_enriched.columns:
-                status_counts = df_enriched['SR Status'].value_counts().reset_index()
-                status_counts.columns = ['SR Status', 'Count']
-                
-                # Create pie chart
-                fig = px.pie(
-                    status_counts, 
-                    values='Count', 
-                    names='SR Status',
-                    hole=0.4
-                )
-                fig.update_layout(
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-                    margin=dict(l=20, r=20, t=30, b=20)
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("SR Status data not available. Please upload SR Status file.")
-        
-        with col2:
-            # Status by user
-            st.markdown("### Status by User")
-            
-            if 'SR Status' in df_enriched.columns:
-                user_status = df_enriched.groupby('Current User Id')['SR Status'].value_counts().unstack().fillna(0)
-                
-                if not user_status.empty:
-                    # Calculate total cases per user
-                    user_status['Total'] = user_status.sum(axis=1)
-                    
-                    # Format for display
-                    user_status_display = user_status.sort_values('Total', ascending=False)
-                    
-                    # Display as a table
-                    st.dataframe(user_status_display)
-            else:
-                st.info("SR Status data not available")
-        
-        # Recent Cases and Trend Charts
-        st.subheader("📊 Recent Activity & Trends")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Weekly Case Trend")
-            
-            # Prepare time series data
-            if 'Case Start Date' in df_enriched.columns:
-                # Create week column
-                df_enriched['Week'] = df_enriched['Case Start Date'].dt.isocalendar().week
-                
-                # Group by week and type
-                weekly_trend = df_enriched.groupby(['Week', 'Type']).size().unstack().fillna(0)
-                
-                # Create line chart
-                if not weekly_trend.empty and 'SR' in weekly_trend.columns:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=weekly_trend.index, 
-                        y=weekly_trend['SR'], 
-                        mode='lines+markers',
-                        name='SR',
-                        line=dict(color='#1976d2', width=3)
-                    ))
-                    
-                    if 'Incident' in weekly_trend.columns:
-                        fig.add_trace(go.Scatter(
-                            x=weekly_trend.index, 
-                            y=weekly_trend['Incident'], 
-                            mode='lines+markers',
-                            name='Incident',
-                            line=dict(color='#ff9800', width=3)
-                        ))
-                    
-                    fig.update_layout(
-                        xaxis_title="Week Number",
-                        yaxis_title="Number of Cases",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                        margin=dict(l=20, r=20, t=30, b=20)
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Insufficient data for trend analysis")
-            else:
-                st.info("Case Start Date not available for trend analysis")
-        
-        with col2:
-            st.markdown("### Case Aging Distribution")
-            
-            # Create age bins
-            age_bins = [0, 3, 7, 14, 30, float('inf')]
-            age_labels = ['0-3 days', '4-7 days', '8-14 days', '15-30 days', '30+ days']
-            
-            df_enriched['Age Group'] = pd.cut(
-                df_enriched['Age (Days)'], 
-                bins=age_bins, 
-                labels=age_labels, 
-                right=False
-            )
-            
-            age_dist = df_enriched['Age Group'].value_counts().sort_index()
-            
-            # Create bar chart
-            fig = px.bar(
-                x=age_dist.index, 
-                y=age_dist.values,
-                labels={'x': 'Age Group', 'y': 'Number of Cases'},
-                color_discrete_sequence=['#1976d2']
-            )
-            fig.update_layout(
-                xaxis_title="Age Group",
-                yaxis_title="Number of Cases",
-                margin=dict(l=20, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Quick search and results
-        st.subheader("🔎 Quick Search")
-        
-        search_col1, search_col2 = st.columns([1, 3])
-        
-        with search_col1:
-            search_input = st.text_input("Enter SR or Incident Number:")
-        
-        with search_col2:
-            if search_input.strip() and search_input.isdigit():
-                search_number = int(search_input)
-                search_results = df_enriched[df_enriched['Ticket Number'] == search_number]
-                
-                if not search_results.empty:
-                    st.success(f"Found ticket #{search_number}")
-                    shown_cols = ['Ticket Number', 'Case Id', 'Current User Id', 'Case Start Date', 'Status']
-                    if 'SR Status' in search_results.columns:
-                        shown_cols.append('SR Status')
-                    
-                    st.dataframe(search_results[shown_cols])
-                else:
-                    st.warning(f"No results found for ticket #{search_number}")
-    
-    #
     # SR ANALYSIS TAB
     #
-    elif selected == "SR Analysis":
-        st.title("🔍 Detailed SR Analysis")
+    if selected == "SR Analysis":
+        st.title("🔍 SR Analysis")
         
         # Display last update time
         st.markdown(f"**Last data update:** {st.session_state.last_upload_time}")
@@ -691,8 +476,8 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         
-        # Display data table with important columns and checkboxes
-        important_cols = ['Last Note', 'Ticket Number', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Age (Days)']
+        # Display data table with important columns
+        important_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
@@ -701,102 +486,83 @@ else:
         # Ensure all columns exist
         display_cols = [col for col in important_cols if col in df_display.columns]
         
-        # Create checkboxes for each row
-        for i, row in df_display.iterrows():
-            col1, col2 = st.columns([0.5, 11.5])
-            
-            with col1:
-                # Check if this row is already tracked
-                is_tracked = row['Case Id'] in [tracked_row['Case Id'] for tracked_row in st.session_state.tracked_rows]
-                
-                # Create checkbox for tracking
-                if st.checkbox("", value=is_tracked, key=f"track_sr_{i}_{row['Case Id']}"):
-                    if not is_tracked:
-                        # Add to tracked rows if not already tracked
-                        track_row(row)
-                else:
-                    if is_tracked:
-                        # Remove from tracked rows if it was tracked
-                        track_row(row)
-            
-            with col2:
-                # Display row data
-                st.write(f"**Case ID:** {row['Case Id']}")
-                st.write(f"**Ticket Number:** {int(row['Ticket Number']) if not pd.isna(row['Ticket Number']) else 'N/A'}")
-                st.write(f"**Owner:** {row['Current User Id']}")
-                st.write(f"**Status:** {row['Status']}")
-                if 'SR Status' in row and not pd.isna(row['SR Status']):
-                    st.write(f"**SR Status:** {row['SR Status']}")
-                st.write(f"**Age:** {row['Age (Days)']} days")
-                st.markdown("---")
+        # Add checkbox column for tracking
+        df_display_with_checkbox = df_display[display_cols].copy()
         
-        # Note viewer
-        if not df_display.empty:
-            st.subheader("📝 Note Details")
+        # Create a dataframe for display
+        if not df_display_with_checkbox.empty:
+            # Add an action column for tracking
+            df_display_with_checkbox['Track'] = [
+                "✓" if row['Case Id'] in [tracked['Case Id'] for tracked in st.session_state.tracked_rows] else ""
+                for _, row in df_display_with_checkbox.iterrows()
+            ]
             
-            selected_case = st.selectbox(
-                "Select a case to view notes:",
+            # Display the table
+            st.dataframe(df_display_with_checkbox)
+            
+            # Add tracking functionality
+            st.subheader("🔍 Track Cases")
+            track_case_id = st.selectbox(
+                "Select a case to track/untrack:",
                 df_display['Case Id'].tolist()
             )
             
-            if selected_case:
-                case_row = df_display[df_display['Case Id'] == selected_case].iloc[0]
+            if track_case_id and st.button("Toggle Tracking"):
+                case_row = df_display[df_display['Case Id'] == track_case_id].iloc[0]
+                track_row(case_row)
+                st.success(f"Case {track_case_id} tracking status toggled!")
+        
+        # Note viewer
+        st.subheader("📝 Note Details")
+        
+        selected_case = st.selectbox(
+            "Select a case to view notes:",
+            df_display['Case Id'].tolist()
+        )
+        
+        if selected_case:
+            case_row = df_display[df_display['Case Id'] == selected_case].iloc[0]
+            
+            # Display case details in a table
+            case_details = {
+                "Field": ["Case ID", "Owner", "Start Date", "Age", "Ticket Number", "Type"],
+                "Value": [
+                    case_row['Case Id'],
+                    case_row['Current User Id'],
+                    case_row['Case Start Date'].strftime('%Y-%m-%d'),
+                    f"{case_row['Age (Days)']} days",
+                    int(case_row['Ticket Number']) if not pd.isna(case_row['Ticket Number']) else 'N/A',
+                    case_row['Type'] if not pd.isna(case_row['Type']) else 'N/A'
+                ]
+            }
+            
+            # Add SR Status if available
+            if 'SR Status' in case_row and not pd.isna(case_row['SR Status']):
+                case_details["Field"].append("SR Status")
+                case_details["Value"].append(case_row['SR Status'])
                 
-                # Display case details
-                detail_col1, detail_col2 = st.columns(2)
-                
-                with detail_col1:
-                    st.markdown("### Case Details")
-                    st.write(f"**Case ID:** {case_row['Case Id']}")
-                    st.write(f"**Owner:** {case_row['Current User Id']}")
-                    st.write(f"**Start Date:** {case_row['Case Start Date'].strftime('%Y-%m-%d')}")
-                    st.write(f"**Age:** {case_row['Age (Days)']} days")
-                
-                with detail_col2:
-                    st.markdown("### Ticket Details")
-                    if not pd.isna(case_row['Ticket Number']):
-                        st.write(f"**Ticket Number:** {int(case_row['Ticket Number'])}")
-                        st.write(f"**Type:** {case_row['Type']}")
-                        
-                        if 'SR Status' in case_row and not pd.isna(case_row['SR Status']):
-                            st.write(f"**SR Status:** {case_row['SR Status']}")
-                            
-                            if 'Last Update' in case_row and not pd.isna(case_row['Last Update']):
-                                st.write(f"**Last Update:** {case_row['Last Update']}")
-                    else:
-                        st.write("No ticket information available")
-                
-                # Display the full note
-                st.markdown("### Last Note")
-                if 'Last Note' in case_row and not pd.isna(case_row['Last Note']):
-                    st.markdown(f"```\n{case_row['Last Note']}\n```")
-                else:
-                    st.info("No notes available for this case")
-                
-                # Add action buttons
-                action_col1, action_col2, action_col3 = st.columns(3)
-                
-                with action_col1:
-                    if st.button("📝 Add to Tracked", key=f"add_tracked_{selected_case}"):
-                        track_row(case_row)
-                        st.success(f"Case {selected_case} added to tracked items")
-                
-                with action_col2:
-                    if 'SR Status' in df_enriched.columns:
-                        if st.button("🔄 Refresh SR Status", key=f"refresh_sr_{selected_case}"):
-                            st.info("SR Status refresh functionality would go here")
-                
-                with action_col3:
-                    if st.button("📤 Export Case Details", key=f"export_{selected_case}"):
-                        case_details = df_display[df_display['Case Id'] == selected_case]
-                        excel_data = generate_excel_download(case_details)
-                        st.download_button(
-                            label="Download Case Details",
-                            data=excel_data,
-                            file_name=f"case_{selected_case}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"dl_case_{selected_case}"
-                        )
+                if 'Last Update' in case_row and not pd.isna(case_row['Last Update']):
+                    case_details["Field"].append("Last Update")
+                    case_details["Value"].append(case_row['Last Update'])
+            
+            # Display as a table
+            st.table(pd.DataFrame(case_details))
+            
+            # Display the full note
+            st.markdown("### Last Note")
+            if 'Last Note' in case_row and not pd.isna(case_row['Last Note']):
+                st.text_area("Note Content", case_row['Last Note'], height=200)
+            else:
+                st.info("No notes available for this case")
+            
+            # Download button for case details
+            excel_data = generate_excel_download(df_display[df_display['Case Id'] == selected_case])
+            st.download_button(
+                label="📥 Download Case Details",
+                data=excel_data,
+                file_name=f"case_{selected_case}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     
     #
     # NOT RESOLVED SR TAB
@@ -811,21 +577,20 @@ else:
             # Convert tracked rows to dataframe
             tracked_df = pd.DataFrame(st.session_state.tracked_rows)
             
-            # Display statistics
+            # Display statistics in a table
             st.subheader("📊 Tracked SR Statistics")
             
-            stat_col1, stat_col2, stat_col3 = st.columns(3)
+            # Create statistics table
+            stats_dict = {
+                "Metric": ["Total Tracked Items", "Service Requests", "Incidents"],
+                "Count": [
+                    len(tracked_df),
+                    len(tracked_df[tracked_df['Type'] == 'SR']),
+                    len(tracked_df[tracked_df['Type'] == 'Incident'])
+                ]
+            }
             
-            with stat_col1:
-                metric_card("Total Tracked Items", len(tracked_df))
-            
-            with stat_col2:
-                sr_count = len(tracked_df[tracked_df['Type'] == 'SR'])
-                metric_card("Service Requests", sr_count)
-            
-            with stat_col3:
-                incident_count = len(tracked_df[tracked_df['Type'] == 'Incident'])
-                metric_card("Incidents", incident_count)
+            st.table(pd.DataFrame(stats_dict))
             
             # Download button
             st.download_button(
@@ -835,311 +600,34 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            # Display tracked items
+            # Display tracked items in a table
             st.subheader("📋 Tracked Items List")
             
-            for i, row in tracked_df.iterrows():
-                col1, col2 = st.columns([0.5, 11.5])
-                
-                with col1:
-                    if st.button("❌", key=f"remove_{i}_{row['Case Id']}"):
-                        # Remove from tracked rows
-                        track_row(row)
-                
-                with col2:
-                    # Display row data with status badge
-                    status_badge = ""
-                    if 'SR Status' in row and not pd.isna(row['SR Status']):
-                        status_class = "badge-pending"
-                        
-                        if row['SR Status'].lower() in ['completed', 'resolved', 'closed']:
-                            status_class = "badge-complete"
-                        elif row['SR Status'].lower() in ['in progress', 'assigned', 'working']:
-                            status_class = "badge-in-progress"
-                        elif row['SR Status'].lower() in ['cancelled', 'rejected']:
-                            status_class = "badge-cancelled"
-                        
-                        status_badge = f'<span class="status-badge {status_class}">{row["SR Status"]}</span>'
-                    
-                    st.markdown(f"**Case ID:** {row['Case Id']} {status_badge}", unsafe_allow_html=True)
-                    st.write(f"**Ticket Number:** {int(row['Ticket Number']) if not pd.isna(row['Ticket Number']) else 'N/A'}")
-                    st.write(f"**Owner:** {row['Current User Id']}")
-                    st.write(f"**Age:** {row['Age (Days)']} days")
-                    
-                    # Show note preview
-                    if 'Last Note' in row and not pd.isna(row['Last Note']):
-                        note_preview = row['Last Note'][:100] + "..." if len(row['Last Note']) > 100 else row['Last Note']
-                        st.write(f"**Note:** {note_preview}")
-                    
-                    st.markdown("---")
-    
-    #
-    # TEAM PERFORMANCE TAB
-    #
-    elif selected == "Team Performance":
-        st.title("👥 Team Performance Metrics")
-        
-        # Display team summary
-        st.subheader("📊 Team Summary")
-        
-        # Calculate metrics by user
-        if not df_enriched.empty:
-            # Group by user
-            user_stats = df_enriched.groupby('Current User Id').agg(
-                Total_Cases=('Case Id', 'count'),
-                SR_Count=('Type', lambda x: (x == 'SR').sum()),
-                Incident_Count=('Type', lambda x: (x == 'Incident').sum()),
-                Not_Triaged=('Status', lambda x: (x == 'Not Triaged').sum()),
-                Average_Age=('Age (Days)', 'mean')
-            ).reset_index()
+            # Prepare display columns
+            display_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
             
-            # Sort by total cases
-            user_stats = user_stats.sort_values('Total_Cases', ascending=False)
+            # Add SR Status columns if available
+            if 'SR Status' in tracked_df.columns:
+                display_cols.extend(['SR Status', 'Last Update'])
             
-            # Calculate percentages
-            user_stats['SR_Percent'] = (user_stats['SR_Count'] / user_stats['Total_Cases'] * 100).round(1)
-            user_stats['Incident_Percent'] = (user_stats['Incident_Count'] / user_stats['Total_Cases'] * 100).round(1)
-            user_stats['Not_Triaged_Percent'] = (user_stats['Not_Triaged'] / user_stats['Total_Cases'] * 100).round(1)
+            # Ensure all columns exist
+            final_cols = [col for col in display_cols if col in tracked_df.columns]
             
-            # Format average age
-            user_stats['Average_Age'] = user_stats['Average_Age'].round(1)
+            # Display the tracking table
+            st.dataframe(tracked_df[final_cols])
             
-            # Display team stats
-            st.dataframe(user_stats.style.background_gradient(subset=['Total_Cases', 'SR_Count', 'Not_Triaged_Percent'], cmap='YlOrRd'))
+            # Add functionality to remove tracked items
+            st.subheader("🗑️ Remove Tracked Item")
             
-            # Create charts
-            st.subheader("📈 Performance Visualization")
-            
-            chart_col1, chart_col2 = st.columns(2)
-            
-            with chart_col1:
-                st.markdown("### Case Distribution by User")
-                
-                # Create case distribution chart
-                fig = px.bar(
-                    user_stats,
-                    x='Current User Id',
-                    y=['SR_Count', 'Incident_Count', 'Not_Triaged'],
-                    title='Case Distribution by User',
-                    labels={'value': 'Number of Cases', 'Current User Id': 'User', 'variable': 'Case Type'},
-                    color_discrete_map={
-                        'SR_Count': '#1976d2',
-                        'Incident_Count': '#ff9800',
-                        'Not_Triaged': '#e53935'
-                    }
-                )
-                
-                fig.update_layout(
-                    xaxis_title="User",
-                    yaxis_title="Number of Cases",
-                    legend_title="Case Type",
-                    barmode='stack'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with chart_col2:
-                st.markdown("### Average Case Age by User")
-                
-                # Create average age chart
-                fig = px.bar(
-                    user_stats,
-                    x='Current User Id',
-                    y='Average_Age',
-                    title='Average Case Age by User',
-                    labels={'Average_Age': 'Average Age (Days)', 'Current User Id': 'User'},
-                    color='Average_Age',
-                    color_continuous_scale='Viridis'
-                )
-                
-                fig.update_layout(
-                    xaxis_title="User",
-                    yaxis_title="Average Age (Days)"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # User specific metrics
-            st.subheader("🔍 User Specific Metrics")
-            
-            selected_user = st.selectbox(
-                "Select a user for detailed metrics:",
-                user_stats['Current User Id'].tolist()
+            remove_case_id = st.selectbox(
+                "Select a case to remove from tracking:",
+                tracked_df['Case Id'].tolist()
             )
             
-            if selected_user:
-                # Filter data for selected user
-                user_data = df_enriched[df_enriched['Current User Id'] == selected_user]
-                
-                # Display user metrics
-                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-                
-                with metric_col1:
-                    metric_card("Total Cases", len(user_data))
-                
-                with metric_col2:
-                    sr_count = len(user_data[user_data['Type'] == 'SR'])
-                    metric_card("Service Requests", sr_count)
-                
-                with metric_col3:
-                    incident_count = len(user_data[user_data['Type'] == 'Incident'])
-                    metric_card("Incidents", incident_count)
-                
-                with metric_col4:
-                    not_triaged = len(user_data[user_data['Status'] == 'Not Triaged'])
-                    metric_card("Not Triaged", not_triaged)
-                
-                # Create detailed charts for the user
-                detail_col1, detail_col2 = st.columns(2)
-                
-                with detail_col1:
-                    st.markdown("### Status Distribution")
-                    
-                    if 'SR Status' in user_data.columns:
-                        status_counts = user_data['SR Status'].value_counts().reset_index()
-                        status_counts.columns = ['SR Status', 'Count']
-                        
-                        fig = px.pie(
-                            status_counts,
-                            values='Count',
-                            names='SR Status',
-                            hole=0.4,
-                            title=f'SR Status Distribution for {selected_user}'
-                        )
-                        
-                        fig.update_layout(
-                            legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5)
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("SR Status data not available")
-                
-                with detail_col2:
-                    st.markdown("### Case Age Distribution")
-                    
-                    age_counts = user_data['Age Group'].value_counts().sort_index().reset_index()
-                    age_counts.columns = ['Age Group', 'Count']
-                    
-                    fig = px.bar(
-                        age_counts,
-                        x='Age Group',
-                        y='Count',
-                        title=f'Case Age Distribution for {selected_user}',
-                        color='Count',
-                        color_continuous_scale='Blues'
-                    )
-                    
-                    fig.update_layout(
-                        xaxis_title="Age Group",
-                        yaxis_title="Number of Cases"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Display user's recent cases
-                st.subheader(f"Recent Cases for {selected_user}")
-                
-                # Sort by case start date
-                recent_cases = user_data.sort_values('Case Start Date', ascending=False).head(10)
-                
-                # Display as a table
-                if not recent_cases.empty:
-                    display_cols = ['Case Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
-                    
-                    if 'SR Status' in recent_cases.columns:
-                        display_cols.append('SR Status')
-                    
-                    st.dataframe(recent_cases[display_cols])
-                else:
-                    st.info(f"No cases found for {selected_user}")
-                
-                # Export user data button
-                st.download_button(
-                    label=f"📥 Download {selected_user}'s Data",
-                    data=generate_excel_download(user_data),
-                    file_name=f"{selected_user}_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-    
-    #
-    # SETTINGS TAB
-    #
-    elif selected == "Settings":
-        st.title("⚙️ Application Settings")
-        
-        st.subheader("🧾 Data Management")
-        
-        # Clear data option
-        if st.button("🗑️ Clear All Data"):
-            # Add confirmation
-            if st.checkbox("Are you sure? This will remove all loaded data."):
-                st.session_state.data_loaded = False
-                st.session_state.main_df = None
-                st.session_state.sr_df = None
-                st.session_state.filtered_df = None
-                st.session_state.last_upload_time = None
-                st.session_state.tracked_rows = []
-                st.success("All data has been cleared!")
-                st.rerun()
-        
-        # Clear only tracked rows
-        if st.button("🧹 Clear Tracked Items"):
-            if st.checkbox("Are you sure? This will remove all tracked items."):
-                st.session_state.tracked_rows = []
-                st.success("All tracked items have been cleared!")
-        
-        st.subheader("🔧 Application Information")
-        
-        # App information
-        info_col1, info_col2 = st.columns(2)
-        
-        with info_col1:
-            st.markdown("### About This Application")
-            st.markdown("""
-            **SR Analyzer Pro** is a specialized tool designed to help teams manage and analyze Service Requests and Incidents efficiently.
-            
-            **Version:** 1.0.0
-            **Last Updated:** April 2025
-            """)
-        
-        with info_col2:
-            st.markdown("### Usage Statistics")
-            if st.session_state.main_df is not None:
-                st.markdown(f"**Total Records:** {len(st.session_state.main_df)}")
-                st.markdown(f"**Tracked Items:** {len(st.session_state.tracked_rows)}")
-                
-                if st.session_state.last_upload_time:
-                    st.markdown(f"**Data Last Uploaded:** {st.session_state.last_upload_time}")
-            else:
-                st.info("No data has been loaded yet.")
-        
-        # Export configuration
-        st.subheader("📤 Export Configuration")
-        
-        export_col1, export_col2 = st.columns(2)
-        
-        with export_col1:
-            st.markdown("### Export Options")
-            
-            export_format = st.selectbox(
-                "Export Format",
-                ["Excel (.xlsx)", "CSV (.csv)"]
-            )
-            
-            include_charts = st.checkbox("Include charts in export", value=True)
-        
-        with export_col2:
-            st.markdown("### Export Content")
-            
-            export_content = st.multiselect(
-                "Select content to export",
-                ["Main Data", "SR Status Data", "Tracked Items", "Analysis Results"],
-                default=["Main Data"]
-            )
-            
-            if st.button("Generate Export"):
-                st.info("Export functionality would be implemented here")
+            if remove_case_id and st.button("Remove from Tracking"):
+                case_row = tracked_df[tracked_df['Case Id'] == remove_case_id].iloc[0]
+                track_row(case_row)
+                st.success(f"Case {remove_case_id} removed from tracking!")
 
 # Run the application
 if __name__ == "__main__":
