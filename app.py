@@ -145,9 +145,8 @@ def classify_and_extract(note):
     
     note_lower = note.lower()
     # Enhanced regex pattern to catch more variations
-    sr_pattern = r'(tkt|sr|inc|ticket|مرجعي|incident|اس ار|انسدنت|service request|#|reference|ref)[\s\W]{0,50}?(\d{4,})'
-    match = re.search(sr_pattern, note_lower)
-    
+    match = re.search(r'(tkt|sr|inc|ticket|مرجعي|incident|اس ار|انسدنت)[\s\S]{0,50}?(\d{4,})', note_lower)
+        
     if match:
         ticket_num = int(match.group(2))
         # SR numbers typically between 14000-16000 (adjust based on your system)
