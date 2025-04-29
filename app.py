@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -117,6 +118,9 @@ if 'last_upload_time' not in st.session_state:
     st.session_state.last_upload_time = None
 if 'selected_users' not in st.session_state:
     st.session_state.selected_users = []
+# New session state for tracked rows
+if 'tracked_rows' not in st.session_state:
+    st.session_state.tracked_rows = []
 
 # Function to load and process data
 @st.cache_data
@@ -161,32 +165,6 @@ def calculate_age(start_date):
         return None
     return (datetime.now() - start_date).days
 
-# Function to calculate SLA status
-def calculate_sla_status(age_days, sr_status=None):
-    if pd.isna(age_days):
-        return "Unknown", 0
-    
-    # SLA thresholds - customize based on your requirements
-    if sr_status in ["Completed", "Cancelled", "Closed"]:
-        return "Completed", 100
-    elif age_days <= 3:
-        return "Within SLA", min(100, 100 - (age_days / 3 * 100))
-    elif age_days <= 5:
-        return "At Risk", max(0, 100 - (age_days / 5 * 150))
-    else:
-        return "Breached", 0
-
-# Function to generate color for SLA status
-def get_sla_color(status):
-    colors = {
-        "Within SLA": "#2e7d32",  # Green
-        "At Risk": "#ff9800",     # Orange
-        "Breached": "#c62828",    # Red
-        "Completed": "#1565c0",   # Blue
-        "Unknown": "#9e9e9e"      # Grey
-    }
-    return colors.get(status, "#9e9e9e")
-
 # Function to create downloadable Excel
 def generate_excel_download(data):
     output = io.BytesIO()
@@ -225,6 +203,21 @@ def metric_card(title, value, delta=None, delta_label=None, icon=None):
     </div>
     """, unsafe_allow_html=True)
 
+# Function to handle row selection for tracking
+def track_row(row_data):
+    case_id = row_data['Case Id']
+    
+    # Check if row is already tracked
+    if case_id in [row['Case Id'] for row in st.session_state.tracked_rows]:
+        # Remove from tracked rows
+        st.session_state.tracked_rows = [row for row in st.session_state.tracked_rows if row['Case Id'] != case_id]
+    else:
+        # Add to tracked rows
+        st.session_state.tracked_rows.append(row_data.to_dict())
+    
+    # Force rerun to update UI
+    st.rerun()
+
 # Sidebar - File Upload Section
 with st.sidebar:
     st.title("📊 SR Analyzer Pro")
@@ -249,6 +242,7 @@ with st.sidebar:
             st.session_state.sr_df = sr_df
         st.success(f"SR status data loaded: {sr_df.shape[0]} records")
     
+    # Display last upload time
     if st.session_state.last_upload_time:
         st.info(f"Last upload: {st.session_state.last_upload_time}")
     
@@ -270,8 +264,8 @@ if not st.session_state.data_loaded:
     **Features:**
     - Advanced filtering and search
     - Visual analytics and charts
-    - SLA monitoring and aging analysis
     - Team performance metrics
+    - Track unresolved SRs in a dedicated tab
     - Export capabilities
     """)
     
@@ -284,8 +278,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["Dashboard", "SR Analysis", "Team Performance", "Settings"],
-        icons=["speedometer2", "kanban", "people", "gear"],
+        options=["Dashboard", "SR Analysis", "Not Resolved SR", "Team Performance", "Settings"],
+        icons=["speedometer2", "kanban", "clipboard-check", "people", "gear"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -338,18 +332,6 @@ else:
                 left_on='Ticket Number',
                 right_on='Service Request'
             ).drop(columns=['Service Request'])
-            
-            # Calculate SLA status
-            df_enriched[['SLA Status', 'SLA Percent']] = df_enriched.apply(
-                lambda row: pd.Series(calculate_sla_status(row['Age (Days)'], row.get('SR Status'))),
-                axis=1
-            )
-        else:
-            # Calculate basic SLA without SR status
-            df_enriched[['SLA Status', 'SLA Percent']] = df_enriched.apply(
-                lambda row: pd.Series(calculate_sla_status(row['Age (Days)'])),
-                axis=1
-            )
         
         return df_enriched
     
@@ -408,6 +390,9 @@ else:
     if selected == "Dashboard":
         st.title("📊 Executive Dashboard")
         
+        # Display last update time
+        st.markdown(f"**Last data update:** {st.session_state.last_upload_time}")
+        
         # Top metrics row
         total_cases = len(df_enriched)
         sr_count = len(df_enriched[df_enriched['Type'] == 'SR'])
@@ -428,60 +413,50 @@ else:
         with col4:
             metric_card("Not Triaged", not_triaged)
         
-        # SLA Overview Chart
-        st.subheader("📈 SLA Overview")
+        # SR Status Overview Chart
+        st.subheader("📈 SR Status Overview")
         
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            # Create SLA data
-            sla_counts = df_enriched['SLA Status'].value_counts().reset_index()
-            sla_counts.columns = ['SLA Status', 'Count']
-            
-            # Create pie chart
-            fig = px.pie(
-                sla_counts, 
-                values='Count', 
-                names='SLA Status',
-                color='SLA Status',
-                color_discrete_map={
-                    'Within SLA': '#2e7d32',
-                    'At Risk': '#ff9800',
-                    'Breached': '#c62828',
-                    'Completed': '#1565c0',
-                    'Unknown': '#9e9e9e'
-                },
-                hole=0.4
-            )
-            fig.update_layout(
-                legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-                margin=dict(l=20, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Create status data if SR status data is available
+            if 'SR Status' in df_enriched.columns:
+                status_counts = df_enriched['SR Status'].value_counts().reset_index()
+                status_counts.columns = ['SR Status', 'Count']
+                
+                # Create pie chart
+                fig = px.pie(
+                    status_counts, 
+                    values='Count', 
+                    names='SR Status',
+                    hole=0.4
+                )
+                fig.update_layout(
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
+                    margin=dict(l=20, r=20, t=30, b=20)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("SR Status data not available. Please upload SR Status file.")
         
         with col2:
-            # SLA by user
-            st.markdown("### SLA by User")
+            # Status by user
+            st.markdown("### Status by User")
             
-            user_sla = df_enriched.groupby('Current User Id')['SLA Status'].value_counts().unstack().fillna(0)
-            
-            if not user_sla.empty:
-                # Calculate compliance percentage
-                user_sla['Total'] = user_sla.sum(axis=1)
-                if 'Within SLA' in user_sla.columns:
-                    user_sla['Compliance %'] = round(user_sla['Within SLA'] / user_sla['Total'] * 100, 1)
-                else:
-                    user_sla['Compliance %'] = 0
+            if 'SR Status' in df_enriched.columns:
+                user_status = df_enriched.groupby('Current User Id')['SR Status'].value_counts().unstack().fillna(0)
                 
-                # Format for display
-                user_sla_display = user_sla[['Compliance %']].sort_values('Compliance %', ascending=False)
-                
-                # Display as a table with progress bars
-                for user, row in user_sla_display.iterrows():
-                    compliance = row['Compliance %']
-                    st.markdown(f"**{user}**")
-                    st.progress(min(compliance / 100, 1.0))
-                    st.markdown(f"{compliance}% compliant")
+                if not user_status.empty:
+                    # Calculate total cases per user
+                    user_status['Total'] = user_status.sum(axis=1)
+                    
+                    # Format for display
+                    user_status_display = user_status.sort_values('Total', ascending=False)
+                    
+                    # Display as a table
+                    st.dataframe(user_status_display)
+            else:
+                st.info("SR Status data not available")
         
         # Recent Cases and Trend Charts
         st.subheader("📊 Recent Activity & Trends")
@@ -579,8 +554,6 @@ else:
                     shown_cols = ['Ticket Number', 'Case Id', 'Current User Id', 'Case Start Date', 'Status']
                     if 'SR Status' in search_results.columns:
                         shown_cols.append('SR Status')
-                    if 'SLA Status' in search_results.columns:
-                        shown_cols.append('SLA Status')
                     
                     st.dataframe(search_results[shown_cols])
                 else:
@@ -592,8 +565,11 @@ else:
     elif selected == "SR Analysis":
         st.title("🔍 Detailed SR Analysis")
         
+        # Display last update time
+        st.markdown(f"**Last data update:** {st.session_state.last_upload_time}")
+        
         # Filtering options
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             status_filter = st.selectbox(
@@ -615,11 +591,6 @@ else:
             else:
                 sr_status_filter = "All"
         
-        with col4:
-            # SLA Status filter
-            sla_status_options = ["All"] + df_enriched['SLA Status'].dropna().unique().tolist()
-            sla_filter = st.selectbox("Filter by SLA Status", sla_status_options)
-        
         # Apply filters
         df_display = df_enriched.copy()
         
@@ -634,9 +605,6 @@ else:
                 df_display = df_display[df_display["SR Status"].isna()]
             else:
                 df_display = df_display[df_display["SR Status"] == sr_status_filter]
-        
-        if sla_filter != "All":
-            df_display = df_display[df_display["SLA Status"] == sla_filter]
         
         # Statistics and summary
         st.subheader("📊 Summary Analysis")
@@ -705,60 +673,6 @@ else:
             else:
                 st.info("Upload SR Status file to view this summary.")
         
-        # SLA Analysis
-        st.subheader("⏱️ SLA Analysis")
-        
-        sla_col1, sla_col2 = st.columns(2)
-        
-        with sla_col1:
-            # SLA status counts
-            sla_counts = df_display['SLA Status'].value_counts().reset_index()
-            sla_counts.columns = ['SLA Status', 'Count']
-            
-            fig = px.bar(
-                sla_counts,
-                x='SLA Status',
-                y='Count',
-                color='SLA Status',
-                color_discrete_map={
-                    'Within SLA': '#2e7d32',
-                    'At Risk': '#ff9800',
-                    'Breached': '#c62828',
-                    'Completed': '#1565c0',
-                    'Unknown': '#9e9e9e'
-                }
-            )
-            fig.update_layout(
-                title="SLA Status Distribution",
-                xaxis_title="SLA Status",
-                yaxis_title="Number of Cases",
-                showlegend=False
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with sla_col2:
-            # Average age by status
-            if 'SR Status' in df_display.columns and 'Age (Days)' in df_display.columns:
-                avg_age = df_display.groupby('SR Status')['Age (Days)'].mean().reset_index()
-                avg_age.columns = ['SR Status', 'Average Age (Days)']
-                avg_age['Average Age (Days)'] = avg_age['Average Age (Days)'].round(1)
-                
-                fig = px.bar(
-                    avg_age,
-                    x='SR Status',
-                    y='Average Age (Days)',
-                    color='Average Age (Days)',
-                    color_continuous_scale=[(0, '#2e7d32'), (0.5, '#ff9800'), (1, '#c62828')]
-                )
-                fig.update_layout(
-                    title="Average Age by SR Status",
-                    xaxis_title="SR Status",
-                    yaxis_title="Average Age (Days)"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("SR Status data not available for this analysis.")
-        
         # Detailed Results
         st.subheader("📋 Filtered Results")
         
@@ -778,8 +692,8 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         
-        # Display data table with important columns
-        important_cols = ['Last Note','Ticket Number', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Age (Days)', 'SLA Status']
+        # Display data table with important columns and checkboxes
+        important_cols = ['Last Note', 'Ticket Number', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Age (Days)']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
@@ -788,25 +702,34 @@ else:
         # Ensure all columns exist
         display_cols = [col for col in important_cols if col in df_display.columns]
         
-        # Custom formatting for SLA Status column
-        def highlight_sla(val):
-            if val == 'Within SLA':
-                return 'background-color: #c8e6c9; color: #2e7d32'
-            elif val == 'At Risk':
-                return 'background-color: #ffecb3; color: #b17825'
-            elif val == 'Breached':
-                return 'background-color: #ffcdd2; color: #c62828'
-            elif val == 'Completed':
-                return 'background-color: #bbdefb; color: #1565c0'
-            return ''
-        
-        # Apply styling
-        styled_df = df_display[display_cols].style.applymap(
-            highlight_sla, 
-            subset=['SLA Status'] if 'SLA Status' in display_cols else []
-        )
-        
-        st.dataframe(styled_df, height=400)
+        # Create checkboxes for each row
+        for i, row in df_display.iterrows():
+            col1, col2 = st.columns([0.5, 11.5])
+            
+            with col1:
+                # Check if this row is already tracked
+                is_tracked = row['Case Id'] in [tracked_row['Case Id'] for tracked_row in st.session_state.tracked_rows]
+                
+                # Create checkbox for tracking
+                if st.checkbox("", value=is_tracked, key=f"track_sr_{i}_{row['Case Id']}"):
+                    if not is_tracked:
+                        # Add to tracked rows if not already tracked
+                        track_row(row)
+                else:
+                    if is_tracked:
+                        # Remove from tracked rows if it was tracked
+                        track_row(row)
+            
+            with col2:
+                # Display row data
+                st.write(f"**Case ID:** {row['Case Id']}")
+                st.write(f"**Ticket Number:** {int(row['Ticket Number']) if not pd.isna(row['Ticket Number']) else 'N/A'}")
+                st.write(f"**Owner:** {row['Current User Id']}")
+                st.write(f"**Status:** {row['Status']}")
+                if 'SR Status' in row and not pd.isna(row['SR Status']):
+                    st.write(f"**SR Status:** {row['SR Status']}")
+                st.write(f"**Age:** {row['Age (Days)']} days")
+                st.markdown("---")
         
         # Note viewer
         if not df_display.empty:
@@ -814,443 +737,411 @@ else:
             
             selected_case = st.selectbox(
                 "Select a case to view notes:",
-                df_display['Case Id'].tolist(),
-                format_func=lambda x: f"Case #{x}"
+                df_display['Case Id'].tolist()
             )
             
             if selected_case:
-                case_data = df_display[df_display['Case Id'] == selected_case].iloc[0]
+                case_row = df_display[df_display['Case Id'] == selected_case].iloc[0]
                 
-                note_col1, note_col2 = st.columns([1, 2])
+                # Display case details
+                detail_col1, detail_col2 = st.columns(2)
                 
-                with note_col1:
-                    st.markdown("**Case Details:**")
-                    st.markdown(f"- **Case ID:** {case_data['Case Id']}")
-                    st.markdown(f"- **Owner:** {case_data['Current User Id']}")
-                    st.markdown(f"- **Start Date:** {case_data['Case Start Date'].strftime('%Y-%m-%d')}")
-                    st.markdown(f"- **Age:** {case_data['Age (Days)']} days")
-                    
-                    if 'Ticket Number' in case_data and not pd.isna(case_data['Ticket Number']):
-                        st.markdown(f"- **Ticket Number:** {int(case_data['Ticket Number'])}")
-                    
-                    if 'SR Status' in case_data and not pd.isna(case_data['SR Status']):
-                        st.markdown(f"- **SR Status:** {case_data['SR Status']}")
-                    
-                    st.markdown(f"- **SLA Status:** {case_data['SLA Status']}")
+                with detail_col1:
+                    st.markdown("### Case Details")
+                    st.write(f"**Case ID:** {case_row['Case Id']}")
+                    st.write(f"**Owner:** {case_row['Current User Id']}")
+                    st.write(f"**Start Date:** {case_row['Case Start Date'].strftime('%Y-%m-%d')}")
+                    st.write(f"**Age:** {case_row['Age (Days)']} days")
                 
-                with note_col2:
-                    st.markdown("**Last Note:**")
-                    note_text = case_data['Last Note'] if not pd.isna(case_data['Last Note']) else "No notes available"
-                    st.markdown(f"```\n{note_text}\n```")
+                with detail_col2:
+                    st.markdown("### Ticket Details")
+                    if not pd.isna(case_row['Ticket Number']):
+                        st.write(f"**Ticket Number:** {int(case_row['Ticket Number'])}")
+                        st.write(f"**Type:** {case_row['Type']}")
+                        
+                        if 'SR Status' in case_row and not pd.isna(case_row['SR Status']):
+                            st.write(f"**SR Status:** {case_row['SR Status']}")
+                            
+                            if 'Last Update' in case_row and not pd.isna(case_row['Last Update']):
+                                st.write(f"**Last Update:** {case_row['Last Update']}")
+                    else:
+                        st.write("No ticket information available")
                 
-                # Add quick actions
-                st.markdown("**Quick Actions:**")
+                # Display the full note
+                st.markdown("### Last Note")
+                if 'Last Note' in case_row and not pd.isna(case_row['Last Note']):
+                    st.markdown(f"```\n{case_row['Last Note']}\n```")
+                else:
+                    st.info("No notes available for this case")
+                
+                # Add action buttons
                 action_col1, action_col2, action_col3 = st.columns(3)
                 
                 with action_col1:
-                    st.button("Mark as Reviewed", key=f"review_{selected_case}")
+                    if st.button("📝 Add to Tracked", key=f"add_tracked_{selected_case}"):
+                        track_row(case_row)
+                        st.success(f"Case {selected_case} added to tracked items")
                 
                 with action_col2:
-                    st.button("Flag for Follow-up", key=f"flag_{selected_case}")
+                    if 'SR Status' in df_enriched.columns:
+                        if st.button("🔄 Refresh SR Status", key=f"refresh_sr_{selected_case}"):
+                            st.info("SR Status refresh functionality would go here")
                 
                 with action_col3:
-                    st.button("Add to Report", key=f"report_{selected_case}")
+                    if st.button("📤 Export Case Details", key=f"export_{selected_case}"):
+                        case_details = df_display[df_display['Case Id'] == selected_case]
+                        excel_data = generate_excel_download(case_details)
+                        st.download_button(
+                            label="Download Case Details",
+                            data=excel_data,
+                            file_name=f"case_{selected_case}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_case_{selected_case}"
+                        )
+    
+    #
+    # NOT RESOLVED SR TAB
+    #
+    elif selected == "Not Resolved SR":
+        st.title("📋 Tracked Service Requests")
+        
+        # Display tracked SRs
+        if not st.session_state.tracked_rows:
+            st.info("No service requests are currently being tracked. Add SRs from the SR Analysis tab.")
+        else:
+            # Convert tracked rows to dataframe
+            tracked_df = pd.DataFrame(st.session_state.tracked_rows)
+            
+            # Display statistics
+            st.subheader("📊 Tracked SR Statistics")
+            
+            stat_col1, stat_col2, stat_col3 = st.columns(3)
+            
+            with stat_col1:
+                metric_card("Total Tracked Items", len(tracked_df))
+            
+            with stat_col2:
+                sr_count = len(tracked_df[tracked_df['Type'] == 'SR'])
+                metric_card("Service Requests", sr_count)
+            
+            with stat_col3:
+                incident_count = len(tracked_df[tracked_df['Type'] == 'Incident'])
+                metric_card("Incidents", incident_count)
+            
+            # Download button
+            st.download_button(
+                label="📥 Download Tracked Items",
+                data=generate_excel_download(tracked_df),
+                file_name=f"tracked_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+            # Display tracked items
+            st.subheader("📋 Tracked Items List")
+            
+            for i, row in tracked_df.iterrows():
+                col1, col2 = st.columns([0.5, 11.5])
+                
+                with col1:
+                    if st.button("❌", key=f"remove_{i}_{row['Case Id']}"):
+                        # Remove from tracked rows
+                        track_row(row)
+                
+                with col2:
+                    # Display row data with status badge
+                    status_badge = ""
+                    if 'SR Status' in row and not pd.isna(row['SR Status']):
+                        status_class = "badge-pending"
+                        
+                        if row['SR Status'].lower() in ['completed', 'resolved', 'closed']:
+                            status_class = "badge-complete"
+                        elif row['SR Status'].lower() in ['in progress', 'assigned', 'working']:
+                            status_class = "badge-in-progress"
+                        elif row['SR Status'].lower() in ['cancelled', 'rejected']:
+                            status_class = "badge-cancelled"
+                        
+                        status_badge = f'<span class="status-badge {status_class}">{row["SR Status"]}</span>'
+                    
+                    st.markdown(f"**Case ID:** {row['Case Id']} {status_badge}", unsafe_allow_html=True)
+                    st.write(f"**Ticket Number:** {int(row['Ticket Number']) if not pd.isna(row['Ticket Number']) else 'N/A'}")
+                    st.write(f"**Owner:** {row['Current User Id']}")
+                    st.write(f"**Age:** {row['Age (Days)']} days")
+                    
+                    # Show note preview
+                    if 'Last Note' in row and not pd.isna(row['Last Note']):
+                        note_preview = row['Last Note'][:100] + "..." if len(row['Last Note']) > 100 else row['Last Note']
+                        st.write(f"**Note:** {note_preview}")
+                    
+                    st.markdown("---")
     
     #
     # TEAM PERFORMANCE TAB
     #
     elif selected == "Team Performance":
-        st.title("👥 Team Performance Analysis")
+        st.title("👥 Team Performance Metrics")
         
-        # Filter data for selected users
-        if st.session_state.selected_users:
-            team_df = df_enriched[df_enriched['Current User Id'].isin(st.session_state.selected_users)].copy()
-        else:
-            team_df = df_enriched.copy()
+        # Display team summary
+        st.subheader("📊 Team Summary")
         
-        # Time period selector
-        period_options = ["Last 7 Days", "Last 30 Days", "All Time"]
-        selected_period = st.selectbox("Select Time Period", period_options)
-        
-        # Filter by selected time period
-        if 'Case Start Date' in team_df.columns:
-            if selected_period == "Last 7 Days":
-                cutoff_date = datetime.now() - timedelta(days=7)
-                team_df = team_df[team_df['Case Start Date'] >= cutoff_date]
-            elif selected_period == "Last 30 Days":
-                cutoff_date = datetime.now() - timedelta(days=30)
-                team_df = team_df[team_df['Case Start Date'] >= cutoff_date]
-        
-        # Team performance metrics
-        st.subheader("📊 Team Performance Metrics")
-        
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-        
-        with metric_col1:
-            total_cases = len(team_df)
-            metric_card("Total Cases", total_cases)
-        
-        with metric_col2:
-            avg_age = round(team_df['Age (Days)'].mean(), 1) if 'Age (Days)' in team_df.columns else 0
-            metric_card("Average Age", f"{avg_age} days")
-        
-        with metric_col3:
-            if 'SLA Status' in team_df.columns:
-                sla_compliant = team_df[team_df['SLA Status'] == 'Within SLA'].shape[0]
-                sla_percent = round((sla_compliant / total_cases * 100), 1) if total_cases > 0 else 0
-                metric_card("SLA Compliance", f"{sla_percent}%")
-            else:
-                metric_card("SLA Compliance", "N/A")
-        
-        with metric_col4:
-            if 'SR Status' in team_df.columns:
-                completed = team_df[team_df['SR Status'].isin(['Completed', 'Closed'])].shape[0]
-                completion_rate = round((completed / total_cases * 100), 1) if total_cases > 0 else 0
-                metric_card("Completion Rate", f"{completion_rate}%")
-            else:
-                metric_card("Completion Rate", "N/A")
-        
-        # User comparison charts
-        st.subheader("👤 User Performance Comparison")
-        
-        chart_col1, chart_col2 = st.columns(2)
-        
-        with chart_col1:
-            # Case volume by user
-            user_counts = team_df.groupby('Current User Id').size().reset_index(name='Case Count')
+        # Calculate metrics by user
+        if not df_enriched.empty:
+            # Group by user
+            user_stats = df_enriched.groupby('Current User Id').agg(
+                Total_Cases=('Case Id', 'count'),
+                SR_Count=('Type', lambda x: (x == 'SR').sum()),
+                Incident_Count=('Type', lambda x: (x == 'Incident').sum()),
+                Not_Triaged=('Status', lambda x: (x == 'Not Triaged').sum()),
+                Average_Age=('Age (Days)', 'mean')
+            ).reset_index()
             
-            fig = px.bar(
-                user_counts,
-                x='Current User Id',
-                y='Case Count',
-                color='Case Count',
-                color_continuous_scale=px.colors.sequential.Blues
-            )
-            fig.update_layout(
-                title="Case Volume by User",
-                xaxis_title="User",
-                yaxis_title="Number of Cases"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with chart_col2:
-            # SLA compliance by user
-            if 'SLA Status' in team_df.columns:
-                # Calculate SLA compliance percentage by user
-                user_sla = team_df.groupby('Current User Id')['SLA Status'].apply(
-                    lambda x: (x == 'Within SLA').mean() * 100
-                ).reset_index(name='SLA Compliance %')
+            # Sort by total cases
+            user_stats = user_stats.sort_values('Total_Cases', ascending=False)
+            
+            # Calculate percentages
+            user_stats['SR_Percent'] = (user_stats['SR_Count'] / user_stats['Total_Cases'] * 100).round(1)
+            user_stats['Incident_Percent'] = (user_stats['Incident_Count'] / user_stats['Total_Cases'] * 100).round(1)
+            user_stats['Not_Triaged_Percent'] = (user_stats['Not_Triaged'] / user_stats['Total_Cases'] * 100).round(1)
+            
+            # Format average age
+            user_stats['Average_Age'] = user_stats['Average_Age'].round(1)
+            
+            # Display team stats
+            st.dataframe(user_stats.style.background_gradient(subset=['Total_Cases', 'SR_Count', 'Not_Triaged_Percent'], cmap='YlOrRd'))
+            
+            # Create charts
+            st.subheader("📈 Performance Visualization")
+            
+            chart_col1, chart_col2 = st.columns(2)
+            
+            with chart_col1:
+                st.markdown("### Case Distribution by User")
                 
+                # Create case distribution chart
                 fig = px.bar(
-                    user_sla,
+                    user_stats,
                     x='Current User Id',
-                    y='SLA Compliance %',
-                    color='SLA Compliance %',
-                    color_continuous_scale=[(0, '#c62828'), (0.5, '#ff9800'), (1, '#2e7d32')]
+                    y=['SR_Count', 'Incident_Count', 'Not_Triaged'],
+                    title='Case Distribution by User',
+                    labels={'value': 'Number of Cases', 'Current User Id': 'User', 'variable': 'Case Type'},
+                    color_discrete_map={
+                        'SR_Count': '#1976d2',
+                        'Incident_Count': '#ff9800',
+                        'Not_Triaged': '#e53935'
+                    }
                 )
+                
                 fig.update_layout(
-                    title="SLA Compliance by User",
                     xaxis_title="User",
-                    yaxis_title="SLA Compliance %"
+                    yaxis_title="Number of Cases",
+                    legend_title="Case Type",
+                    barmode='stack'
                 )
+                
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("SLA data not available for this analysis.")
-        
-        # Performance over time
-        st.subheader("📈 Performance Over Time")
-        
-        if 'Case Start Date' in team_df.columns:
-            # Create week and month columns
-            team_df['Week'] = team_df['Case Start Date'].dt.isocalendar().week
-            team_df['Month'] = team_df['Case Start Date'].dt.month
-            team_df['Month Name'] = team_df['Case Start Date'].dt.month.apply(lambda x: calendar.month_abbr[x])
             
-            # User selection for timeline
+            with chart_col2:
+                st.markdown("### Average Case Age by User")
+                
+                # Create average age chart
+                fig = px.bar(
+                    user_stats,
+                    x='Current User Id',
+                    y='Average_Age',
+                    title='Average Case Age by User',
+                    labels={'Average_Age': 'Average Age (Days)', 'Current User Id': 'User'},
+                    color='Average_Age',
+                    color_continuous_scale='Viridis'
+                )
+                
+                fig.update_layout(
+                    xaxis_title="User",
+                    yaxis_title="Average Age (Days)"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # User specific metrics
+            st.subheader("🔍 User Specific Metrics")
+            
             selected_user = st.selectbox(
-                "Select User for Timeline Analysis",
-                ["All Users"] + list(team_df['Current User Id'].unique())
+                "Select a user for detailed metrics:",
+                user_stats['Current User Id'].tolist()
             )
             
-            # Filter by selected user
-            if selected_user != "All Users":
-                timeline_df = team_df[team_df['Current User Id'] == selected_user]
-            else:
-                timeline_df = team_df
-            
-            # Time period selection for chart
-            time_unit = st.radio("Time Unit", ["Weekly", "Monthly"], horizontal=True)
-            
-            if time_unit == "Weekly":
-                # Weekly trend
-                weekly_counts = timeline_df.groupby('Week').size().reset_index(name='Case Count')
+            if selected_user:
+                # Filter data for selected user
+                user_data = df_enriched[df_enriched['Current User Id'] == selected_user]
                 
-                fig = px.line(
-                    weekly_counts,
-                    x='Week',
-                    y='Case Count',
-                    markers=True,
-                    line_shape='linear'
-                )
-                fig.update_layout(
-                    title=f"Weekly Case Volume - {selected_user}",
-                    xaxis_title="Week Number",
-                    yaxis_title="Number of Cases"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                # Monthly trend
-                monthly_counts = timeline_df.groupby(['Month', 'Month Name']).size().reset_index(name='Case Count')
-                monthly_counts = monthly_counts.sort_values('Month')
+                # Display user metrics
+                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
                 
-                fig = px.line(
-                    monthly_counts,
-                    x='Month Name',
-                    y='Case Count',
-                    markers=True,
-                    line_shape='linear'
-                )
-                fig.update_layout(
-                    title=f"Monthly Case Volume - {selected_user}",
-                    xaxis_title="Month",
-                    yaxis_title="Number of Cases",
-                    xaxis={'categoryorder': 'array', 'categoryarray': [calendar.month_abbr[i] for i in range(1, 13)]}
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Case Start Date not available for timeline analysis.")
-        
-        # Workload distribution
-        st.subheader("⚖️ Workload Distribution Analysis")
-        
-        # Calculate workload metrics
-        workload_df = team_df.groupby('Current User Id').agg({
-            'Case Id': 'count',
-            'Age (Days)': 'mean',
-        }).reset_index()
-        
-        # Add SLA compliance if available
-        if 'SLA Status' in team_df.columns:
-            sla_by_user = team_df.groupby('Current User Id')['SLA Status'].apply(
-                lambda x: (x == 'Within SLA').mean() * 100
-            ).reset_index(name='SLA Compliance %')
-            workload_df = workload_df.merge(sla_by_user, on='Current User Id')
-        
-        # Rename columns for display
-        workload_df = workload_df.rename(columns={
-            'Case Id': 'Case Count',
-            'Age (Days)': 'Avg Age (Days)'
-        })
-        
-        # Round numeric columns
-        if 'Avg Age (Days)' in workload_df.columns:
-            workload_df['Avg Age (Days)'] = workload_df['Avg Age (Days)'].round(1)
-        if 'SLA Compliance %' in workload_df.columns:
-            workload_df['SLA Compliance %'] = workload_df['SLA Compliance %'].round(1)
-        
-        # Display workload table
-        st.dataframe(workload_df, height=300)
-        
-        # Add workload balance chart
-        if len(workload_df) > 1:
-            st.subheader("🔄 Workload Balance")
-            
-            # Calculate workload distribution statistics
-            case_std = workload_df['Case Count'].std()
-            case_mean = workload_df['Case Count'].mean()
-            case_cv = case_std / case_mean if case_mean > 0 else 0
-            
-            # Create a gauge chart for workload balance
-            balance_col1, balance_col2 = st.columns([1, 2])
-            
-            with balance_col1:
-                st.markdown("### Workload Balance Score")
+                with metric_col1:
+                    metric_card("Total Cases", len(user_data))
                 
-                # Calculate balance score (lower CV means better balance)
-                balance_score = max(0, min(100, 100 * (1 - case_cv)))
+                with metric_col2:
+                    sr_count = len(user_data[user_data['Type'] == 'SR'])
+                    metric_card("Service Requests", sr_count)
                 
-                # Determine score color and message
-                if balance_score >= 80:
-                    score_color = "#2e7d32"  # Green
-                    score_message = "Well Balanced"
-                elif balance_score >= 60:
-                    score_color = "#ff9800"  # Orange
-                    score_message = "Moderately Balanced"
-                else:
-                    score_color = "#c62828"  # Red
-                    score_message = "Needs Rebalancing"
+                with metric_col3:
+                    incident_count = len(user_data[user_data['Type'] == 'Incident'])
+                    metric_card("Incidents", incident_count)
                 
-                # Display score
-                st.markdown(f"""
-                <div style="text-align: center;">
-                    <h1 style="color: {score_color}; font-size: 3em;">{balance_score:.1f}%</h1>
-                    <p style="color: {score_color}; font-weight: bold;">{score_message}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with balance_col2:
-                # Create recommendation based on workload balance
-                st.markdown("### Workload Recommendations")
+                with metric_col4:
+                    not_triaged = len(user_data[user_data['Status'] == 'Not Triaged'])
+                    metric_card("Not Triaged", not_triaged)
                 
-                if balance_score < 80:
-                    # Find overloaded and underloaded users
-                    workload_df['Difference from Average'] = workload_df['Case Count'] - case_mean
-                    overloaded = workload_df[workload_df['Difference from Average'] > 5].sort_values('Case Count', ascending=False)
-                    underloaded = workload_df[workload_df['Difference from Average'] < -5].sort_values('Case Count')
+                # Create detailed charts for the user
+                detail_col1, detail_col2 = st.columns(2)
+                
+                with detail_col1:
+                    st.markdown("### Status Distribution")
                     
-                    if not overloaded.empty and not underloaded.empty:
-                        st.markdown("#### Suggested Workload Transfers:")
+                    if 'SR Status' in user_data.columns:
+                        status_counts = user_data['SR Status'].value_counts().reset_index()
+                        status_counts.columns = ['SR Status', 'Count']
                         
-                        for _, over_user in overloaded.iterrows():
-                            for _, under_user in underloaded.iterrows():
-                                transfer_amount = min(
-                                    over_user['Difference from Average'] / 2,
-                                    abs(under_user['Difference from Average'])
-                                )
-                                transfer_amount = max(1, round(transfer_amount))
-                                
-                                st.markdown(f"""
-                                * Transfer **{transfer_amount}** cases from **{over_user['Current User Id']}** ({over_user['Case Count']} cases) 
-                                  to **{under_user['Current User Id']}** ({under_user['Case Count']} cases)
-                                """)
+                        fig = px.pie(
+                            status_counts,
+                            values='Count',
+                            names='SR Status',
+                            hole=0.4,
+                            title=f'SR Status Distribution for {selected_user}'
+                        )
+                        
+                        fig.update_layout(
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5)
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
-                        st.markdown("Workload is somewhat uneven, but no specific transfers are recommended.")
+                        st.info("SR Status data not available")
+                
+                with detail_col2:
+                    st.markdown("### Case Age Distribution")
+                    
+                    age_counts = user_data['Age Group'].value_counts().sort_index().reset_index()
+                    age_counts.columns = ['Age Group', 'Count']
+                    
+                    fig = px.bar(
+                        age_counts,
+                        x='Age Group',
+                        y='Count',
+                        title=f'Case Age Distribution for {selected_user}',
+                        color='Count',
+                        color_continuous_scale='Blues'
+                    )
+                    
+                    fig.update_layout(
+                        xaxis_title="Age Group",
+                        yaxis_title="Number of Cases"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Display user's recent cases
+                st.subheader(f"Recent Cases for {selected_user}")
+                
+                # Sort by case start date
+                recent_cases = user_data.sort_values('Case Start Date', ascending=False).head(10)
+                
+                # Display as a table
+                if not recent_cases.empty:
+                    display_cols = ['Case Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
+                    
+                    if 'SR Status' in recent_cases.columns:
+                        display_cols.append('SR Status')
+                    
+                    st.dataframe(recent_cases[display_cols])
                 else:
-                    st.markdown("✅ **Workload is well balanced across the team.**")
-                    st.markdown("Continue monitoring to maintain this balance.")
+                    st.info(f"No cases found for {selected_user}")
+                
+                # Export user data button
+                st.download_button(
+                    label=f"📥 Download {selected_user}'s Data",
+                    data=generate_excel_download(user_data),
+                    file_name=f"{selected_user}_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
     
     #
     # SETTINGS TAB
     #
     elif selected == "Settings":
-        st.title("⚙️ Configuration Settings")
+        st.title("⚙️ Application Settings")
         
-        st.subheader("🛠️ System Configuration")
+        st.subheader("🧾 Data Management")
         
-        # General configuration
-        st.markdown("### General Settings")
+        # Clear data option
+        if st.button("🗑️ Clear All Data"):
+            # Add confirmation
+            if st.checkbox("Are you sure? This will remove all loaded data."):
+                st.session_state.data_loaded = False
+                st.session_state.main_df = None
+                st.session_state.sr_df = None
+                st.session_state.filtered_df = None
+                st.session_state.last_upload_time = None
+                st.session_state.tracked_rows = []
+                st.success("All data has been cleared!")
+                st.rerun()
         
-        config_col1, config_col2 = st.columns(2)
+        # Clear only tracked rows
+        if st.button("🧹 Clear Tracked Items"):
+            if st.checkbox("Are you sure? This will remove all tracked items."):
+                st.session_state.tracked_rows = []
+                st.success("All tracked items have been cleared!")
         
-        with config_col1:
-            default_theme = st.selectbox(
-                "Default UI Theme",
-                ["Light", "Dark", "Auto"]
-            )
+        st.subheader("🔧 Application Information")
+        
+        # App information
+        info_col1, info_col2 = st.columns(2)
+        
+        with info_col1:
+            st.markdown("### About This Application")
+            st.markdown("""
+            **SR Analyzer Pro** is a specialized tool designed to help teams manage and analyze Service Requests and Incidents efficiently.
             
-            data_refresh = st.selectbox(
-                "Data Refresh Interval",
-                ["Manual", "Hourly", "Daily", "Weekly"]
-            )
+            **Version:** 1.0.0
+            **Last Updated:** April 2025
+            """)
         
-        with config_col2:
-            default_tab = st.selectbox(
-                "Default Tab on Load",
-                ["Dashboard", "SR Analysis", "Team Performance"]
-            )
-            
-            language = st.selectbox(
-                "Language",
-                ["English", "Arabic", "French"]
-            )
-        
-        # SLA configuration
-        st.markdown("### SLA Configuration")
-        
-        sla_col1, sla_col2 = st.columns(2)
-        
-        with sla_col1:
-            within_sla = st.number_input("Within SLA (days)", min_value=1, max_value=10, value=3)
-            at_risk = st.number_input("At Risk (days)", min_value=within_sla, max_value=15, value=5)
-        
-        with sla_col2:
-            breached = st.number_input("Breached (days)", min_value=at_risk, value=at_risk + 1)
-            st.markdown("**Note:** Cases older than this will be marked as breached.")
-        
-        # User configuration
-        st.subheader("👥 User Management")
-        
-        # Create a dataframe with sample users
-        default_users = [
-            {"Username": "ali.babiker", "Role": "SR Analyst", "Team": "Frontend Support"},
-            {"Username": "anas.hasan", "Role": "SR Analyst", "Team": "Backend Support"},
-            {"Username": "ahmed.mostafa", "Role": "Team Lead", "Team": "Frontend Support"}
-        ]
-        
-        # Add more users from the data if available
-        if st.session_state.main_df is not None:
-            for user in st.session_state.main_df['Current User Id'].unique():
-                if user not in [u["Username"] for u in default_users]:
-                    default_users.append({
-                        "Username": user,
-                        "Role": "SR Analyst",
-                        "Team": "General Support"
-                    })
-        
-        user_df = pd.DataFrame(default_users)
-        
-        # Edit user information
-        edited_user_df = st.data_editor(
-            user_df,
-            num_rows="dynamic",
-            column_config={
-                "Username": st.column_config.TextColumn("Username", help="User's login name"),
-                "Role": st.column_config.SelectboxColumn(
-                    "Role",
-                    help="User's role in the system",
-                    options=["SR Analyst", "Team Lead", "Manager", "Admin"]
-                ),
-                "Team": st.column_config.SelectboxColumn(
-                    "Team",
-                    help="User's team",
-                    options=["Frontend Support", "Backend Support", "General Support", "Specialized Support"]
-                )
-            },
-            use_container_width=True
-        )
-        
-        st.button("Save User Configuration")
-        
-        # Export & Import settings
-        st.subheader("💾 Export & Import Configuration")
-        
-        exp_col1, exp_col2 = st.columns(2)
-        
-        with exp_col1:
-            st.download_button(
-                label="Export Configuration",
-                data="Sample configuration data",
-                file_name=f"sr_analyzer_config_{datetime.now().strftime('%Y%m%d')}.json",
-                mime="application/json"
-            )
-        
-        with exp_col2:
-            st.file_uploader("Import Configuration", type=["json"])
-        
-        # Advanced settings
-        st.subheader("🔧 Advanced Settings")
-        
-        adv_col1, adv_col2 = st.columns(2)
-        
-        with adv_col1:
-            st.checkbox("Enable debug mode", value=False)
-            st.checkbox("Cache data for faster performance", value=True)
-        
-        with adv_col2:
-            st.checkbox("Send email notifications for breached SLAs", value=False)
-            st.checkbox("Auto-generate weekly reports", value=False)
-        
-        # About section
-        st.markdown("---")
-        st.markdown("### About SR Analyzer Pro")
-        st.markdown("""
-        **Version:** 2.0.0
-        
-        **Developed by:** Your Organization
-        
-        **Last Updated:** April 2025
-        
-        This application helps you manage and analyze Service Requests and Incidents effectively.
-        For support or feedback, please contact your system administrator.
-        """)
+        with info_col2:
+            st.markdown("### Usage Statistics")
+            if st.session_state.main_df is not None:
+                st.markdown(f"**Total Records:** {len(st.session_state.main_df)}")
+                st.markdown(f"**Tracked Items:** {len(st.session_state.tracked_rows)}")
                 
+                if st.session_state.last_upload_time:
+                    st.markdown(f"**Data Last Uploaded:** {st.session_state.last_upload_time}")
+            else:
+                st.info("No data has been loaded yet.")
+        
+        # Export configuration
+        st.subheader("📤 Export Configuration")
+        
+        export_col1, export_col2 = st.columns(2)
+        
+        with export_col1:
+            st.markdown("### Export Options")
+            
+            export_format = st.selectbox(
+                "Export Format",
+                ["Excel (.xlsx)", "CSV (.csv)"]
+            )
+            
+            include_charts = st.checkbox("Include charts in export", value=True)
+        
+        with export_col2:
+            st.markdown("### Export Content")
+            
+            export_content = st.multiselect(
+                "Select content to export",
+                ["Main Data", "SR Status Data", "Tracked Items", "Analysis Results"],
+                default=["Main Data"]
+            )
+            
+            if st.button("Generate Export"):
+                st.info("Export functionality would be implemented here")
+
+# Run the application
+if __name__ == "__main__":
+    pass
