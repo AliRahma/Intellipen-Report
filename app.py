@@ -72,6 +72,32 @@ def set_custom_theme():
     h1, h2, h3 {
         color: #1565c0;
     }
+    /* Custom styling for multi-select dataframe */
+    div[data-testid="stDataFrame"] table {
+        width: 100%;
+    }
+    div[data-testid="stDataFrame"] th:first-child, 
+    div[data-testid="stDataFrame"] td:first-child {
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
+    }
+    .st-ch {
+        font-size: 14px;
+    }
+    .action-button {
+        background-color: #1976d2;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 5px 10px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-bottom: 10px;
+    }
+    .action-button:hover {
+        background-color: #1565c0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -93,6 +119,9 @@ if 'selected_users' not in st.session_state:
 # Session state for tracked rows
 if 'tracked_rows' not in st.session_state:
     st.session_state.tracked_rows = []
+# Session state for selected rows
+if 'selected_case_ids' not in st.session_state:
+    st.session_state.selected_case_ids = []
 
 # Function to load and process data
 @st.cache_data
@@ -176,9 +205,20 @@ def track_row(row_data):
     else:
         # Add to tracked rows
         st.session_state.tracked_rows.append(row_data.to_dict())
+
+# Function to handle bulk tracking operations
+def bulk_track_toggle(df, case_ids):
+    """Toggle tracking status for multiple cases at once"""
+    if not case_ids:
+        return
+        
+    for case_id in case_ids:
+        # Get the row data for this case
+        case_data = df[df['Case Id'] == case_id].iloc[0]
+        track_row(case_data)
     
-    # Force rerun to update UI
-    st.rerun()
+    # Clear selection after processing
+    st.session_state.selected_case_ids = []
 
 # Sidebar - File Upload Section
 with st.sidebar:
@@ -258,6 +298,7 @@ if not st.session_state.data_loaded:
     - Advanced filtering and search
     - Detailed SR Analysis
     - Track unresolved SRs
+    - Multi-select tracking
     """)
 else:
     # Process and filter data
@@ -476,8 +517,8 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         
-        # Display data table with important columns
-        important_cols = ['Last Note','Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
+        # Display data table with important columns and multi-select functionality
+        important_cols = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
@@ -486,31 +527,88 @@ else:
         # Ensure all columns exist
         display_cols = [col for col in important_cols if col in df_display.columns]
         
-        # Add checkbox column for tracking
-        df_display_with_checkbox = df_display[display_cols].copy()
-        
-        # Create a dataframe for display
-        if not df_display_with_checkbox.empty:
-            # Add an action column for tracking
-            df_display_with_checkbox['Track'] = [
+        # Prepare dataframe with selection column and tracking status
+        if not df_display.empty:
+            # Create a new dataframe for display
+            df_selection = df_display[display_cols].copy()
+            
+            # Add tracking status column
+            df_selection['Tracked'] = [
                 "✓" if row['Case Id'] in [tracked['Case Id'] for tracked in st.session_state.tracked_rows] else ""
-                for _, row in df_display_with_checkbox.iterrows()
+                for _, row in df_selection.iterrows()
             ]
             
-            # Display the table
-            st.dataframe(df_display_with_checkbox)
+            # Convert to a list of dictionaries for the data editor
+            selection_data = df_selection.to_dict('records')
             
-            # Add tracking functionality
-            st.subheader("🔍 Track Cases")
-            track_case_id = st.selectbox(
-                "Select a case to track/untrack:",
-                df_display['Case Id'].tolist()
+            # Create multi-select dataframe
+            st.markdown("Select rows below to track/untrack them:")
+            
+            # Display with st.data_editor for selection functionality
+            edited_df = st.data_editor(
+                df_selection,
+                column_config={
+                    "Tracked": st.column_config.CheckboxColumn(
+                        "Track",
+                        help="Select to track/untrack",
+                        default=False,
+                    )
+                },
+                hide_index=True,
+                key="selection_table"
             )
             
-            if track_case_id and st.button("Toggle Tracking"):
-                case_row = df_display[df_display['Case Id'] == track_case_id].iloc[0]
-                track_row(case_row)
-                st.success(f"Case {track_case_id} tracking status toggled!")
+            # Handle the tracking toggle for selected rows
+            if st.button("Toggle Tracking for Selected Rows", key="toggle_tracking"):
+                # Get rows where 'Tracked' is checked
+                selected_rows = edited_df[edited_df['Tracked'] == True]
+                
+                # Process each selected row
+                if not selected_rows.empty:
+                    for _, row in selected_rows.iterrows():
+                        case_id = row['Case Id']
+                        case_data = df_display[df_display['Case Id'] == case_id].iloc[0]
+                        track_row(case_data)
+                    
+                    st.success(f"Toggled tracking for {len(selected_rows)} items!")
+                    st.rerun()
+                else:
+                    st.warning("No rows selected. Please select rows to track/untrack.")
+            
+            # Button to track all visible rows
+            if st.button("Track All Visible Rows", key="track_all"):
+                # Get all visible case IDs
+                visible_case_ids = df_display['Case Id'].tolist()
+                
+                # Add tracking for all visible cases
+                for case_id in visible_case_ids:
+                    # Check if not already tracked
+                    if case_id not in [row['Case Id'] for row in st.session_state.tracked_rows]:
+                        case_data = df_display[df_display['Case Id'] == case_id].iloc[0]
+                        track_row(case_data)
+                
+                st.success(f"Added {len(visible_case_ids)} items to tracking!")
+                st.rerun()
+            
+            # Button to un-track all visible rows
+            if st.button("Untrack All Visible Rows", key="untrack_all"):
+                # Get all visible case IDs
+                visible_case_ids = df_display['Case Id'].tolist()
+                
+                # Count items to untrack
+                to_untrack = [case_id for case_id in visible_case_ids if case_id in [row['Case Id'] for row in st.session_state.tracked_rows]]
+                
+                # Remove tracking for all visible cases
+                st.session_state.tracked_rows = [
+                    row for row in st.session_state.tracked_rows 
+                    if row['Case Id'] not in visible_case_ids
+                ]
+                
+                if to_untrack:
+                    st.success(f"Removed {len(to_untrack)} items from tracking!")
+                    st.rerun()
+                else:
+                    st.info("No tracked items found in the current view.")
         
         # Note viewer
         st.subheader("📝 Note Details")
@@ -547,6 +645,15 @@ else:
             
             # Display as a table
             st.table(pd.DataFrame(case_details))
+            
+            # Track/untrack button for this specific case
+            is_tracked = case_row['Case Id'] in [row['Case Id'] for row in st.session_state.tracked_rows]
+            track_button_label = "🔄 Remove from Tracking" if is_tracked else "✅ Add to Tracking"
+            
+            if st.button(track_button_label):
+                track_row(case_row)
+                st.success(f"Case {case_row['Case Id']} {'removed from' if is_tracked else 'added to'} tracking!")
+                st.rerun()
             
             # Display the full note
             st.markdown("### Last Note")
@@ -600,7 +707,7 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            # Display tracked items in a table
+            # Add batch untrack functionality
             st.subheader("📋 Tracked Items List")
             
             # Prepare display columns
@@ -613,22 +720,57 @@ else:
             # Ensure all columns exist
             final_cols = [col for col in display_cols if col in tracked_df.columns]
             
-            # Display the tracking table
-            st.dataframe(tracked_df[final_cols])
+            # Display the tracking table with multi-select
+            tracked_data = tracked_df[final_cols].copy()
             
-            # Add functionality to remove tracked items
-            st.subheader("🗑️ Remove Tracked Item")
-            
-            remove_case_id = st.selectbox(
-                "Select a case to remove from tracking:",
-                tracked_df['Case Id'].tolist()
+            # Add selection column for multi-select untracking
+            edited_tracked_df = st.data_editor(
+                tracked_data,
+                column_config={
+                    "Select": st.column_config.CheckboxColumn(
+                        "Select",
+                        help="Select to remove from tracking",
+                        default=False,
+                    )
+                },
+                hide_index=True,
+                key="tracked_items_table"
             )
             
-            if remove_case_id and st.button("Remove from Tracking"):
-                case_row = tracked_df[tracked_df['Case Id'] == remove_case_id].iloc[0]
-                track_row(case_row)
-                st.success(f"Case {remove_case_id} removed from tracking!")
-
+            # Button to remove selected tracked items
+            if st.button("Remove Selected from Tracking", key="remove_selected"):
+                # Get rows where 'Select' is checked
+                selected_rows = edited_tracked_df[edited_tracked_df['Select'] == True]
+                
+                if not selected_rows.empty:
+                    # Get selected case IDs
+                    selected_case_ids = selected_rows['Case Id'].tolist()
+                    
+                    # Remove from tracked rows
+                    st.session_state.tracked_rows = [
+                        row for row in st.session_state.tracked_rows 
+                        if row['Case Id'] not in selected_case_ids
+                    ]
+                    
+                    st.success(f"Removed {len(selected_case_ids)} items from tracking!")
+                    st.rerun()
+                else:
+                    st.warning("No rows selected. Please select rows to remove from tracking.")
+            
+            # Button to clear all tracking
+            if st.button("Clear All Tracking", key="clear_all"):
+                if st.session_state.tracked_rows:
+                    # Count before clearing
+                    count = len(st.session_state.tracked_rows)
+                    
+                    # Clear tracking
+                    st.session_state.tracked_rows = []
+                    
+                    st.success(f"Removed all {count} items from tracking!")
+                    st.rerun()
+                else:
+                    st.info("No items to clear from tracking.")
+                    
 # Run the application
 if __name__ == "__main__":
     pass
