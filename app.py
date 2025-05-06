@@ -518,7 +518,7 @@ else:
                 )
         
         # Display data table with important columns and multi-select functionality
-        important_cols = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
+        important_cols = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
