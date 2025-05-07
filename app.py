@@ -134,7 +134,8 @@ def process_main_df(df):
     date_columns = ['Case Start Date', 'Last Note Date']
     for col in date_columns:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
+            df[col] = pd.to_datetime(df[col], format="%d/%m/%Y", errors='coerce')
+    return df
     
     # Extract all unique users
     if 'Current User Id' in df.columns:
