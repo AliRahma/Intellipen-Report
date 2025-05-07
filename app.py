@@ -924,7 +924,7 @@ else:
                 )
             
             # Display columns
-            display_cols = ['Case Id', 'Case Start Date', 'Last Note Date', 'Status', 'Type', 'Ticket Number']
+            display_cols = ['Case Id', 'Case Start Date','Last Note', 'Last Note Date', 'Status', 'Type', 'Ticket Number']
             
             # Include SR Status if available
             if 'SR Status' in df_today_filtered.columns:
