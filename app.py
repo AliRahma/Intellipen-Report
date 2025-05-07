@@ -9,7 +9,7 @@ from streamlit_option_menu import option_menu
 
 # Set page configuration
 st.set_page_config(
-    page_title="SR Analyzer Pro Test",
+    page_title="SR Analyzer Pro",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
