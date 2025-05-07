@@ -131,7 +131,7 @@ def load_data(file):
 # Function to process main dataframe
 def process_main_df(df):
     # Ensure date columns are in datetime format
-    date_columns = ['Case Start Date', 'Last Updated']
+    date_columns = ['Case Start Date', 'Last Note Date']
     for col in date_columns:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
