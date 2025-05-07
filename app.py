@@ -9,7 +9,7 @@ from streamlit_option_menu import option_menu
 
 # Set page configuration
 st.set_page_config(
-    page_title="SR Analyzer Pro",
+    page_title="SR Analyzer Pro Test",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -166,6 +166,14 @@ def calculate_age(start_date):
         return None
     return (datetime.now() - start_date).days
 
+# Function to determine if a note was created today
+def is_created_today(date_value):
+    if pd.isna(date_value):
+        return False
+    today = datetime.now().date()
+    note_date = date_value.date() if isinstance(date_value, datetime) else date_value
+    return note_date == today
+
 # Function to create downloadable Excel
 def generate_excel_download(data):
     output = io.BytesIO()
@@ -299,6 +307,7 @@ if not st.session_state.data_loaded:
     - Detailed SR Analysis
     - Track unresolved SRs
     - Multi-select tracking
+    - Today's new incidents and SRs
     """)
 else:
     # Process and filter data
@@ -321,8 +330,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["SR Analysis", "Not Resolved SR"],
-        icons=["kanban", "clipboard-check"],
+        options=["SR Analysis", "Not Resolved SR", "Today's SR/Incidents"],
+        icons=["kanban", "clipboard-check", "calendar-date"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -352,6 +361,10 @@ else:
         # Calculate case age
         if 'Case Start Date' in df_enriched.columns:
             df_enriched['Age (Days)'] = df_enriched['Case Start Date'].apply(calculate_age)
+        
+        # Determine if note was created today
+        if 'Last Note Date' in df_enriched.columns:
+            df_enriched['Created Today'] = df_enriched['Last Note Date'].apply(is_created_today)
         
         # Merge with SR status data if available
         if st.session_state.sr_df is not None:
@@ -717,15 +730,12 @@ else:
             if 'SR Status' in tracked_df.columns:
                 display_cols.extend(['SR Status', 'Last Update'])
             
-            # Ensure all columns exist
-            final_cols = [col for col in display_cols if col in tracked_df.columns]
+            # Filter columns that exist in the dataframe
+            display_cols = [col for col in display_cols if col in tracked_df.columns]
             
-            # Display the tracking table with multi-select
-            tracked_data = tracked_df[final_cols].copy()
-            
-            # Add selection column for multi-select untracking
+            # Display the tracked items with checkboxes for multi-select
             edited_tracked_df = st.data_editor(
-                tracked_data,
+                tracked_df[display_cols],
                 column_config={
                     "Select": st.column_config.CheckboxColumn(
                         "Select",
@@ -737,40 +747,328 @@ else:
                 key="tracked_items_table"
             )
             
-            # Button to remove selected tracked items
-            if st.button("Remove Selected from Tracking", key="remove_selected"):
-                # Get rows where 'Select' is checked
-                selected_rows = edited_tracked_df[edited_tracked_df['Select'] == True]
-                
-                if not selected_rows.empty:
-                    # Get selected case IDs
-                    selected_case_ids = selected_rows['Case Id'].tolist()
+            # Button to untrack selected items
+            if st.button("Untrack Selected Items", key="untrack_selected"):
+                # Get the selected rows from the edited dataframe
+                if "Select" in edited_tracked_df.columns:
+                    selected_to_untrack = edited_tracked_df[edited_tracked_df["Select"] == True]['Case Id'].tolist()
                     
-                    # Remove from tracked rows
-                    st.session_state.tracked_rows = [
-                        row for row in st.session_state.tracked_rows 
-                        if row['Case Id'] not in selected_case_ids
-                    ]
-                    
-                    st.success(f"Removed {len(selected_case_ids)} items from tracking!")
-                    st.rerun()
-                else:
-                    st.warning("No rows selected. Please select rows to remove from tracking.")
+                    if selected_to_untrack:
+                        # Remove selected rows from tracked rows
+                        st.session_state.tracked_rows = [
+                            row for row in st.session_state.tracked_rows 
+                            if row['Case Id'] not in selected_to_untrack
+                        ]
+                        
+                        st.success(f"Removed {len(selected_to_untrack)} items from tracking!")
+                        st.rerun()
+                    else:
+                        st.warning("No items selected for untracking.")
             
-            # Button to clear all tracking
-            if st.button("Clear All Tracking", key="clear_all"):
-                if st.session_state.tracked_rows:
-                    # Count before clearing
-                    count = len(st.session_state.tracked_rows)
+            # Clear all tracked items button
+            if st.button("Clear All Tracked Items", key="clear_tracked"):
+                st.session_state.tracked_rows = []
+                st.success("All tracked items cleared!")
+                st.rerun()
+            
+            # Detail view of a selected tracked item
+            st.subheader("🔍 Tracked Item Details")
+            
+            if not tracked_df.empty:
+                selected_tracked_case = st.selectbox(
+                    "Select a tracked case to view details:",
+                    tracked_df['Case Id'].tolist(),
+                    key="tracked_case_select"
+                )
+                
+                if selected_tracked_case:
+                    tracked_case_row = tracked_df[tracked_df['Case Id'] == selected_tracked_case].iloc[0]
                     
-                    # Clear tracking
-                    st.session_state.tracked_rows = []
+                    # Create columns for layout
+                    col1, col2 = st.columns(2)
                     
-                    st.success(f"Removed all {count} items from tracking!")
+                    with col1:
+                        # Case details
+                        st.markdown("### Case Information")
+                        
+                        # Prepare case details
+                        details = {
+                            "Field": ["Case ID", "Owner", "Start Date", "Age"],
+                            "Value": [
+                                tracked_case_row['Case Id'],
+                                tracked_case_row['Current User Id'],
+                                tracked_case_row['Case Start Date'].strftime('%Y-%m-%d') if 'Case Start Date' in tracked_case_row and not pd.isna(tracked_case_row['Case Start Date']) else 'N/A',
+                                f"{tracked_case_row['Age (Days)']} days" if 'Age (Days)' in tracked_case_row and not pd.isna(tracked_case_row['Age (Days)']) else 'N/A'
+                            ]
+                        }
+                        
+                        # Add SR-related details
+                        if 'Ticket Number' in tracked_case_row and not pd.isna(tracked_case_row['Ticket Number']):
+                            details["Field"].extend(["Ticket Number", "Type"])
+                            details["Value"].extend([
+                                int(tracked_case_row['Ticket Number']),
+                                tracked_case_row['Type'] if not pd.isna(tracked_case_row['Type']) else 'N/A'
+                            ])
+                        
+                        # Add SR status if available
+                        if 'SR Status' in tracked_case_row and not pd.isna(tracked_case_row['SR Status']):
+                            details["Field"].append("SR Status")
+                            details["Value"].append(tracked_case_row['SR Status'])
+                            
+                            if 'Last Update' in tracked_case_row and not pd.isna(tracked_case_row['Last Update']):
+                                details["Field"].append("Last Update")
+                                details["Value"].append(tracked_case_row['Last Update'])
+                        
+                        # Show case details table
+                        st.table(pd.DataFrame(details))
+                    
+                    with col2:
+                        # Note content
+                        st.markdown("### Last Note")
+                        
+                        if 'Last Note' in tracked_case_row and not pd.isna(tracked_case_row['Last Note']):
+                            st.text_area("Note Content", tracked_case_row['Last Note'], height=250, key="tracked_note")
+                        else:
+                            st.info("No notes available for this case")
+                    
+                    # Button to remove this specific tracked item
+                    if st.button("Remove from Tracking", key="remove_single_tracked"):
+                        # Remove from tracked rows
+                        st.session_state.tracked_rows = [
+                            row for row in st.session_state.tracked_rows 
+                            if row['Case Id'] != selected_tracked_case
+                        ]
+                        
+                        st.success(f"Removed case {selected_tracked_case} from tracking!")
+                        st.rerun()
+    
+    #
+    # TODAY'S SR/INCIDENTS TAB
+    #
+    elif selected == "Today's SR/Incidents":
+        st.title("📆 Today's New SR/Incidents")
+        
+        # Get all items created today
+        df_today = df_enriched[df_enriched['Created Today'] == True].copy()
+        
+        # Display summary statistics
+        st.subheader("📊 Today's Activity Summary")
+        
+        # Statistics in cards
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            sr_count = len(df_today[df_today['Type'] == 'SR'])
+            st.markdown(f'<p class="metric-value">{sr_count}</p>', unsafe_allow_html=True)
+            st.markdown('<p class="metric-label">New Service Requests Today</p>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            incident_count = len(df_today[df_today['Type'] == 'Incident'])
+            st.markdown(f'<p class="metric-value">{incident_count}</p>', unsafe_allow_html=True)
+            st.markdown('<p class="metric-label">New Incidents Today</p>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            total_count = len(df_today)
+            st.markdown(f'<p class="metric-value">{total_count}</p>', unsafe_allow_html=True)
+            st.markdown('<p class="metric-label">Total New Items Today</p>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Display today's items
+        st.subheader("📋 Today's New Items")
+        
+        if df_today.empty:
+            st.info("No new SR/Incidents found for today.")
+        else:
+            # Filter options
+            today_filter_col1, today_filter_col2 = st.columns(2)
+            
+            with today_filter_col1:
+                today_type_filter = st.selectbox(
+                    "Filter by Type",
+                    ["All", "SR", "Incident"],
+                    key="today_type_filter"
+                )
+            
+            with today_filter_col2:
+                today_user_filter = st.selectbox(
+                    "Filter by User",
+                    ["All"] + df_today['Current User Id'].dropna().unique().tolist(),
+                    key="today_user_filter"
+                )
+            
+            # Apply filters
+            df_today_filtered = df_today.copy()
+            
+            if today_type_filter != "All":
+                df_today_filtered = df_today_filtered[df_today_filtered['Type'] == today_type_filter]
+            
+            if today_user_filter != "All":
+                df_today_filtered = df_today_filtered[df_today_filtered['Current User Id'] == today_user_filter]
+            
+            # Display filtered results
+            st.markdown(f"**Filtered Results:** {len(df_today_filtered)} items")
+            
+            # Download button
+            if not df_today_filtered.empty:
+                st.download_button(
+                    label="📥 Download Today's Items",
+                    data=generate_excel_download(df_today_filtered),
+                    file_name=f"today_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+            # Display columns
+            display_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number']
+            
+            # Include SR Status if available
+            if 'SR Status' in df_today_filtered.columns:
+                display_cols.extend(['SR Status', 'Last Update'])
+            
+            # Filter columns that exist in the dataframe
+            display_cols = [col for col in display_cols if col in df_today_filtered.columns]
+            
+            # Display the data
+            st.dataframe(df_today_filtered[display_cols], hide_index=True)
+            
+            # Add tracking functionality
+            st.subheader("🔍 Track Today's Items")
+            
+            # Select items to track
+            selected_case_today = st.selectbox(
+                "Select a case to view details or track:",
+                df_today_filtered['Case Id'].tolist(),
+                key="today_case_select"
+            )
+            
+            if selected_case_today:
+                today_case_row = df_today_filtered[df_today_filtered['Case Id'] == selected_case_today].iloc[0]
+                
+                # Display case details
+                st.markdown("### Case Details")
+                
+                # Create columns for layout
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Case information
+                    details = {
+                        "Field": ["Case ID", "Owner", "Start Date"],
+                        "Value": [
+                            today_case_row['Case Id'],
+                            today_case_row['Current User Id'],
+                            today_case_row['Case Start Date'].strftime('%Y-%m-%d') if not pd.isna(today_case_row['Case Start Date']) else 'N/A'
+                        ]
+                    }
+                    
+                    # Add SR-related details
+                    if 'Ticket Number' in today_case_row and not pd.isna(today_case_row['Ticket Number']):
+                        details["Field"].extend(["Ticket Number", "Type"])
+                        details["Value"].extend([
+                            int(today_case_row['Ticket Number']),
+                            today_case_row['Type'] if not pd.isna(today_case_row['Type']) else 'N/A'
+                        ])
+                    
+                    # Add SR status if available
+                    if 'SR Status' in today_case_row and not pd.isna(today_case_row['SR Status']):
+                        details["Field"].append("SR Status")
+                        details["Value"].append(today_case_row['SR Status'])
+                        
+                        if 'Last Update' in today_case_row and not pd.isna(today_case_row['Last Update']):
+                            details["Field"].append("Last Update")
+                            details["Value"].append(today_case_row['Last Update'])
+                    
+                    # Show case details table
+                    st.table(pd.DataFrame(details))
+                
+                with col2:
+                    # Note content
+                    st.markdown("### Last Note")
+                    
+                    if 'Last Note' in today_case_row and not pd.isna(today_case_row['Last Note']):
+                        st.text_area("Note Content", today_case_row['Last Note'], height=250, key="today_note")
+                    else:
+                        st.info("No notes available for this case")
+                
+                # Check if item is already tracked
+                is_tracked = today_case_row['Case Id'] in [row['Case Id'] for row in st.session_state.tracked_rows]
+                
+                # Track/untrack button
+                track_button_label = "🔄 Remove from Tracking" if is_tracked else "✅ Add to Tracking"
+                
+                if st.button(track_button_label, key="today_track_button"):
+                    track_row(today_case_row)
+                    st.success(f"Case {today_case_row['Case Id']} {'removed from' if is_tracked else 'added to'} tracking!")
+                    st.rerun()
+            
+            # Add multi-select tracking functionality
+            st.subheader("📋 Bulk Track Today's Items")
+            
+            # Create dataframe with selection column
+            df_today_select = df_today_filtered[display_cols].copy()
+            
+            # Add tracking status column
+            df_today_select['Tracked'] = [
+                "✓" if row['Case Id'] in [tracked['Case Id'] for tracked in st.session_state.tracked_rows] else ""
+                for _, row in df_today_select.iterrows()
+            ]
+            
+            # Display with selection capability
+            edited_today_df = st.data_editor(
+                df_today_select,
+                column_config={
+                    "Select": st.column_config.CheckboxColumn(
+                        "Select",
+                        help="Select to track these items",
+                        default=False,
+                    )
+                },
+                hide_index=True,
+                key="today_selection_table"
+            )
+            
+            # Button to track selected items
+            if st.button("Track Selected Items", key="today_track_selected"):
+                # Check if Select column exists
+                if "Select" in edited_today_df.columns:
+                    selected_to_track = edited_today_df[edited_today_df["Select"] == True]['Case Id'].tolist()
+                    
+                    if selected_to_track:
+                        # Track each selected item
+                        for case_id in selected_to_track:
+                            # Check if not already tracked
+                            if case_id not in [row['Case Id'] for row in st.session_state.tracked_rows]:
+                                case_data = df_today_filtered[df_today_filtered['Case Id'] == case_id].iloc[0]
+                                track_row(case_data)
+                        
+                        st.success(f"Added {len(selected_to_track)} items to tracking!")
+                        st.rerun()
+                    else:
+                        st.warning("No items selected for tracking.")
+            
+            # Button to track all today's items
+            if st.button("Track All Today's Items", key="track_all_today"):
+                # Get all case IDs
+                all_today_cases = df_today_filtered['Case Id'].tolist()
+                
+                # Count new items to track
+                new_to_track = [case_id for case_id in all_today_cases if case_id not in [row['Case Id'] for row in st.session_state.tracked_rows]]
+                
+                # Track each item
+                for case_id in new_to_track:
+                    case_data = df_today_filtered[df_today_filtered['Case Id'] == case_id].iloc[0]
+                    track_row(case_data)
+                
+                if new_to_track:
+                    st.success(f"Added {len(new_to_track)} new items to tracking!")
                     st.rerun()
                 else:
-                    st.info("No items to clear from tracking.")
-                    
-# Run the application
+                    st.info("All items are already being tracked.")
+
+# Run the app
 if __name__ == "__main__":
-    pass
+    pass  # The Streamlit script is run directly when imported
