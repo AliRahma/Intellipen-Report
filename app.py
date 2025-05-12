@@ -482,8 +482,8 @@ else:
                 # Drop rows where SR Status is NaN
                 df_status_valid = df_enriched.dropna(subset=['SR Status'])
                 
-                # All SR status count
-                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='All SR Count')
+                # Cases status count
+                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='Cases Count')
                 
                 # Unique SRs
                 sr_unique = df_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'SR Status']].drop_duplicates()
@@ -491,12 +491,12 @@ else:
                 
                 # Merge both summaries
                 merged_sr = pd.merge(sr_all_counts, sr_unique_counts, on='SR Status', how='outer').fillna(0)
-                merged_sr[['All SR Count', 'Unique SR Count']] = merged_sr[['All SR Count', 'Unique SR Count']].astype(int)
+                merged_sr[['Cases Count', 'Unique SR Count']] = merged_sr[['Cases Count', 'Unique SR Count']].astype(int)
                 
                 # Total row
                 total_row = {
                     'SR Status': 'Total',
-                    'All SR Count': merged_sr['All SR Count'].sum(),
+                    'Cases Count': merged_sr['Cases Count'].sum(),
                     'Unique SR Count': merged_sr['Unique SR Count'].sum()
                 }
                 
