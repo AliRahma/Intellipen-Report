@@ -52,6 +52,10 @@ def set_custom_theme():
         background-color: #ffcdd2;
         color: #c62828;
     }
+    .badge-breach {
+        background-color: #ff5252;
+        color: white;
+    }
     .card {
         background-color: white;
         border-radius: 10px;
@@ -116,10 +120,6 @@ if 'last_upload_time' not in st.session_state:
     st.session_state.last_upload_time = None
 if 'selected_users' not in st.session_state:
     st.session_state.selected_users = []
-# Session state for tracked rows
-if 'tracked_rows' not in st.session_state:
-    st.session_state.tracked_rows = []
-# Session state for selected rows
 if 'selected_case_ids' not in st.session_state:
     st.session_state.selected_case_ids = []
 
@@ -203,32 +203,6 @@ def generate_excel_download(data):
     output.seek(0)
     return output
 
-# Function to handle row selection for tracking
-def track_row(row_data):
-    case_id = row_data['Case Id']
-    
-    # Check if row is already tracked
-    if case_id in [row['Case Id'] for row in st.session_state.tracked_rows]:
-        # Remove from tracked rows
-        st.session_state.tracked_rows = [row for row in st.session_state.tracked_rows if row['Case Id'] != case_id]
-    else:
-        # Add to tracked rows
-        st.session_state.tracked_rows.append(row_data.to_dict())
-
-# Function to handle bulk tracking operations
-def bulk_track_toggle(df, case_ids):
-    """Toggle tracking status for multiple cases at once"""
-    if not case_ids:
-        return
-        
-    for case_id in case_ids:
-        # Get the row data for this case
-        case_data = df[df['Case Id'] == case_id].iloc[0]
-        track_row(case_data)
-    
-    # Clear selection after processing
-    st.session_state.selected_case_ids = []
-
 # Sidebar - File Upload Section
 with st.sidebar:
     st.title("📊 SR Analyzer Pro")
@@ -236,7 +210,7 @@ with st.sidebar:
 
     st.subheader("📁 Data Import")
     uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx","xls"])
-    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type="xlsx")
+    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
     
     if uploaded_file:
         with st.spinner("Loading main data..."):
@@ -306,8 +280,7 @@ if not st.session_state.data_loaded:
     **Features:**
     - Advanced filtering and search
     - Detailed SR Analysis
-    - Track unresolved SRs
-    - Multi-select tracking
+    - SLA Breach monitoring
     - Today's new incidents and SRs
     """)
 else:
@@ -331,8 +304,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["SR Analysis", "Not Resolved SR", "Today's SR/Incidents"],
-        icons=["kanban", "clipboard-check", "calendar-date"],
+        options=["SR Analysis", "SLA Breach", "Today's SR/Incidents"],
+        icons=["kanban", "exclamation-triangle", "calendar-date"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -384,12 +357,15 @@ else:
             # Merge data
             df_enriched['Ticket Number'] = pd.to_numeric(df_enriched['Ticket Number'], errors='coerce')
             df_enriched = df_enriched.merge(
-                sr_df[['Service Request', 'SR Status', 'Last Update']],
+                sr_df[['Service Request', 'SR Status', 'Last Update', 'Breach Passed']],
                 how='left',
                 left_on='Ticket Number',
                 right_on='Service Request'
             ).drop(columns=['Service Request'])
-        
+
+            # After merging with SR status data
+        if 'Breach Date' in df_enriched.columns:
+            df_enriched['Breach Date'] = pd.to_datetime(df_enriched['Breach Date'], errors='coerce')
         return df_enriched
     
     # Enrich data with classifications and metrics
@@ -482,8 +458,8 @@ else:
                 # Drop rows where SR Status is NaN
                 df_status_valid = df_enriched.dropna(subset=['SR Status'])
                 
-                # Cases status count
-                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='Cases Count')
+                # All SR status count
+                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='All SR Count')
                 
                 # Unique SRs
                 sr_unique = df_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'SR Status']].drop_duplicates()
@@ -491,12 +467,12 @@ else:
                 
                 # Merge both summaries
                 merged_sr = pd.merge(sr_all_counts, sr_unique_counts, on='SR Status', how='outer').fillna(0)
-                merged_sr[['Cases Count', 'Unique SR Count']] = merged_sr[['Cases Count', 'Unique SR Count']].astype(int)
+                merged_sr[['All SR Count', 'Unique SR Count']] = merged_sr[['All SR Count', 'Unique SR Count']].astype(int)
                 
                 # Total row
                 total_row = {
                     'SR Status': 'Total',
-                    'Cases Count': merged_sr['Cases Count'].sum(),
+                    'All SR Count': merged_sr['All SR Count'].sum(),
                     'Unique SR Count': merged_sr['Unique SR Count'].sum()
                 }
                 
@@ -531,98 +507,22 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         
-        # Display data table with important columns and multi-select functionality
+        # Display data table with important columns
         important_cols = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number']
         
         # Add SR Status columns if available
         if 'SR Status' in df_display.columns:
             important_cols.extend(['SR Status', 'Last Update'])
+            if 'Breach Passed' in df_display.columns:
+                important_cols.append('Breach Passed')
         
         # Ensure all columns exist
         display_cols = [col for col in important_cols if col in df_display.columns]
         
-        # Prepare dataframe with selection column and tracking status
+        # Prepare dataframe for display
         if not df_display.empty:
-            # Create a new dataframe for display
-            df_selection = df_display[display_cols].copy()
-            
-            # Add tracking status column
-            df_selection['Tracked'] = [
-                "✓" if row['Case Id'] in [tracked['Case Id'] for tracked in st.session_state.tracked_rows] else ""
-                for _, row in df_selection.iterrows()
-            ]
-            
-            # Convert to a list of dictionaries for the data editor
-            selection_data = df_selection.to_dict('records')
-            
-            # Create multi-select dataframe
-            st.markdown("Select rows below to track/untrack them:")
-            
-            # Display with st.data_editor for selection functionality
-            edited_df = st.data_editor(
-                df_selection,
-                column_config={
-                    "Tracked": st.column_config.CheckboxColumn(
-                        "Track",
-                        help="Select to track/untrack",
-                        default=False,
-                    )
-                },
-                hide_index=True,
-                key="selection_table"
-            )
-            
-            # Handle the tracking toggle for selected rows
-            if st.button("Toggle Tracking for Selected Rows", key="toggle_tracking"):
-                # Get rows where 'Tracked' is checked
-                selected_rows = edited_df[edited_df['Tracked'] == True]
-                
-                # Process each selected row
-                if not selected_rows.empty:
-                    for _, row in selected_rows.iterrows():
-                        case_id = row['Case Id']
-                        case_data = df_display[df_display['Case Id'] == case_id].iloc[0]
-                        track_row(case_data)
-                    
-                    st.success(f"Toggled tracking for {len(selected_rows)} items!")
-                    st.rerun()
-                else:
-                    st.warning("No rows selected. Please select rows to track/untrack.")
-            
-            # Button to track all visible rows
-            if st.button("Track All Visible Rows", key="track_all"):
-                # Get all visible case IDs
-                visible_case_ids = df_display['Case Id'].tolist()
-                
-                # Add tracking for all visible cases
-                for case_id in visible_case_ids:
-                    # Check if not already tracked
-                    if case_id not in [row['Case Id'] for row in st.session_state.tracked_rows]:
-                        case_data = df_display[df_display['Case Id'] == case_id].iloc[0]
-                        track_row(case_data)
-                
-                st.success(f"Added {len(visible_case_ids)} items to tracking!")
-                st.rerun()
-            
-            # Button to un-track all visible rows
-            if st.button("Untrack All Visible Rows", key="untrack_all"):
-                # Get all visible case IDs
-                visible_case_ids = df_display['Case Id'].tolist()
-                
-                # Count items to untrack
-                to_untrack = [case_id for case_id in visible_case_ids if case_id in [row['Case Id'] for row in st.session_state.tracked_rows]]
-                
-                # Remove tracking for all visible cases
-                st.session_state.tracked_rows = [
-                    row for row in st.session_state.tracked_rows 
-                    if row['Case Id'] not in visible_case_ids
-                ]
-                
-                if to_untrack:
-                    st.success(f"Removed {len(to_untrack)} items from tracking!")
-                    st.rerun()
-                else:
-                    st.info("No tracked items found in the current view.")
+            # Display with st.dataframe
+            st.dataframe(df_display[display_cols], hide_index=True)
         
         # Note viewer
         st.subheader("📝 Note Details")
@@ -656,18 +556,13 @@ else:
                 if 'Last Update' in case_row and not pd.isna(case_row['Last Update']):
                     case_details["Field"].append("Last Update")
                     case_details["Value"].append(case_row['Last Update'])
+                
+                if 'Breach Passed' in case_row:
+                    case_details["Field"].append("SLA Breach")
+                    case_details["Value"].append("Yes ⚠️" if case_row['Breach Passed'] == True else "No")
             
             # Display as a table
             st.table(pd.DataFrame(case_details))
-            
-            # Track/untrack button for this specific case
-            is_tracked = case_row['Case Id'] in [row['Case Id'] for row in st.session_state.tracked_rows]
-            track_button_label = "🔄 Remove from Tracking" if is_tracked else "✅ Add to Tracking"
-            
-            if st.button(track_button_label):
-                track_row(case_row)
-                st.success(f"Case {case_row['Case Id']} {'removed from' if is_tracked else 'added to'} tracking!")
-                st.rerun()
             
             # Display the full note
             st.markdown("### Last Note")
@@ -684,328 +579,305 @@ else:
                 file_name=f"case_{selected_case}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-    
+            
     #
-    # NOT RESOLVED SR TAB
+    # SLA BREACH TAB
     #
-    elif selected == "Not Resolved SR":
-        st.title("📋 Tracked Service Requests")
+    elif selected == "SLA Breach":
+        st.title("⚠️ SLA Breach Analysis")
         
-        # Display tracked SRs
-        if not st.session_state.tracked_rows:
-            st.info("No service requests are currently being tracked. Add SRs from the SR Analysis tab.")
+        # Check if SR data is available
+        if st.session_state.sr_df is None:
+            st.warning("Please upload SR Status Excel file to view SLA breach information.")
         else:
-            # Convert tracked rows to dataframe
-            tracked_df = pd.DataFrame(st.session_state.tracked_rows)
-            
-            # Display statistics in a table
-            st.subheader("📊 Tracked SR Statistics")
-            
-            # Create statistics table
-            stats_dict = {
-                "Metric": ["Total Tracked Items", "Service Requests", "Incidents"],
-                "Count": [
-                    len(tracked_df),
-                    len(tracked_df[tracked_df['Type'] == 'SR']),
-                    len(tracked_df[tracked_df['Type'] == 'Incident'])
-                ]
-            }
-            
-            st.table(pd.DataFrame(stats_dict))
-            
-            # Download button
-            st.download_button(
-                label="📥 Download Tracked Items",
-                data=generate_excel_download(tracked_df),
-                file_name=f"tracked_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            # Add batch untrack functionality
-            st.subheader("📋 Tracked Items List")
-            
-            # Prepare display columns
-            display_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Status', 'Type', 'Ticket Number', 'Age (Days)']
-            
-            # Add SR Status columns if available
-            if 'SR Status' in tracked_df.columns:
-                display_cols.extend(['SR Status', 'Last Update'])
-            
-            # Filter columns that exist in the dataframe
-            display_cols = [col for col in display_cols if col in tracked_df.columns]
-            
-            # Display the tracked items with checkboxes for multi-select
-            edited_tracked_df = st.data_editor(
-                tracked_df[display_cols],
-                column_config={
-                    "Select": st.column_config.CheckboxColumn(
-                        "Select",
-                        help="Select to remove from tracking",
-                        default=False,
-                    )
-                },
-                hide_index=True,
-                key="tracked_items_table"
-            )
-            
-            # Button to untrack selected items
-            if st.button("Untrack Selected Items", key="untrack_selected"):
-                # Get the selected rows from the edited dataframe
-                if "Select" in edited_tracked_df.columns:
-                    selected_to_untrack = edited_tracked_df[edited_tracked_df["Select"] == True]['Case Id'].tolist()
-                    
-                    if selected_to_untrack:
-                        # Remove selected rows from tracked rows
-                        st.session_state.tracked_rows = [
-                            row for row in st.session_state.tracked_rows 
-                            if row['Case Id'] not in selected_to_untrack
-                        ]
-                        
-                        st.success(f"Removed {len(selected_to_untrack)} items from tracking!")
-                        st.rerun()
-                    else:
-                        st.warning("No items selected for untracking.")
-            
-            # Clear all tracked items button
-            if st.button("Clear All Tracked Items", key="clear_tracked"):
-                st.session_state.tracked_rows = []
-                st.success("All tracked items cleared!")
-                st.rerun()
-            
-            # Detail view of a selected tracked item
-            st.subheader("🔍 Tracked Item Details")
-            
-            if not tracked_df.empty:
-                selected_tracked_case = st.selectbox(
-                    "Select a tracked case to view details:",
-                    tracked_df['Case Id'].tolist(),
-                    key="tracked_case_select"
-                )
+            # Filter to get only breach cases
+            if 'Breach Passed' in df_enriched.columns:
+                breach_df = df_enriched[df_enriched['Breach Passed'] == True].copy()
                 
-                if selected_tracked_case:
-                    tracked_case_row = tracked_df[tracked_df['Case Id'] == selected_tracked_case].iloc[0]
+                # Display summary statistics
+                st.subheader("📊 SLA Breach Summary")
+                
+                # Statistics cards
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    breach_count = len(breach_df)
+                    st.markdown(f'<p class="metric-value">{breach_count}</p>', unsafe_allow_html=True)
+                    st.markdown('<p class="metric-label">Total SLA Breaches</p>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    if 'SR Status' in breach_df.columns:
+                        open_breaches = len(breach_df[breach_df['SR Status'].isin(['Open', 'In Progress', 'Pending'])])
+                        st.markdown(f'<p class="metric-value">{open_breaches}</p>', unsafe_allow_html=True)
+                        st.markdown('<p class="metric-label">Open Breached Cases</p>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<p class="metric-value">N/A</p>', unsafe_allow_html=True)
+                        st.markdown('<p class="metric-label">Open Breached Cases</p>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    if 'Current User Id' in breach_df.columns:
+                        user_breach_count = len(breach_df['Current User Id'].unique())
+                        st.markdown(f'<p class="metric-value">{user_breach_count}</p>', unsafe_allow_html=True)
+                        st.markdown('<p class="metric-label">Users Affected</p>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<p class="metric-value">N/A</p>', unsafe_allow_html=True)
+                        st.markdown('<p class="metric-label">Users Affected</p>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Filtering options for breach data
+                st.subheader("🔍 Filter SLA Breaches")
+                
+                filter_col1, filter_col2 = st.columns(2)
+                
+                with filter_col1:
+                    if 'SR Status' in breach_df.columns:
+                        breach_status_options = ["All"] + breach_df['SR Status'].dropna().unique().tolist()
+                        breach_status_filter = st.selectbox("Filter by Status", breach_status_options)
+                    else:
+                        breach_status_filter = "All"
+                
+                with filter_col2:
+                    if 'Current User Id' in breach_df.columns:
+                        breach_user_options = ["All"] + breach_df['Current User Id'].dropna().unique().tolist()
+                        breach_user_filter = st.selectbox("Filter by User", breach_user_options)
+                    else:
+                        breach_user_filter = "All"
+                
+                # Apply filters
+                filtered_breach_df = breach_df.copy()
+                
+                if breach_status_filter != "All" and 'SR Status' in filtered_breach_df.columns:
+                    filtered_breach_df = filtered_breach_df[filtered_breach_df['SR Status'] == breach_status_filter]
+                
+                if breach_user_filter != "All" and 'Current User Id' in filtered_breach_df.columns:
+                    filtered_breach_df = filtered_breach_df[filtered_breach_df['Current User Id'] == breach_user_filter]
+                
+                # Breach data table
+                st.subheader("📋 SLA Breach Details")
+                
+                if filtered_breach_df.empty:
+                    st.info("No SLA breaches found matching the current filters.")
+                else:
+                    # Results count and download button
+                    results_col1, results_col2 = st.columns([3, 1])
                     
-                    # Create columns for layout
-                    col1, col2 = st.columns(2)
+                    with results_col1:
+                        st.markdown(f"**Total Breached Records:** {filtered_breach_df.shape[0]}")
                     
-                    with col1:
-                        # Case details
-                        st.markdown("### Case Information")
+                    with results_col2:
+                        excel_data = generate_excel_download(filtered_breach_df)
+                        st.download_button(
+                            label="📥 Download Breaches",
+                            data=excel_data,
+                            file_name=f"sla_breaches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    
+                    # Important columns for breach display
+                    breach_display_cols = ['Case Id','Last Note', 'Current User Id', 'Case Start Date', 'Type', 'Ticket Number', 'SR Status', 'Breach Date']
+                    
+                    # Ensure all columns exist
+                    breach_display_cols = [col for col in breach_display_cols if col in filtered_breach_df.columns]
+                    
+                    # Display breach data
+                    st.dataframe(filtered_breach_df[breach_display_cols], hide_index=True)
+                    
+                    # Detailed breach case viewer
+                    st.subheader("🔍 Breach Case Details")
+                    
+                    selected_breach_case = st.selectbox(
+                        "Select a breached case to view details:",
+                        filtered_breach_df['Case Id'].tolist()
+                    )
+                    
+                    if selected_breach_case:
+                        breach_row = filtered_breach_df[filtered_breach_df['Case Id'] == selected_breach_case].iloc[0]
                         
-                        # Prepare case details
-                        details = {
-                            "Field": ["Case ID", "Owner", "Start Date", "Age"],
+                        # Display case details in a table
+                        breach_details = {
+                            "Field": ["Case ID", "Owner", "Start Date", "Age", "Ticket Number", "Type"],
                             "Value": [
-                                tracked_case_row['Case Id'],
-                                tracked_case_row['Current User Id'],
-                                tracked_case_row['Case Start Date'].strftime('%Y-%m-%d') if 'Case Start Date' in tracked_case_row and not pd.isna(tracked_case_row['Case Start Date']) else 'N/A',
-                                f"{tracked_case_row['Age (Days)']} days" if 'Age (Days)' in tracked_case_row and not pd.isna(tracked_case_row['Age (Days)']) else 'N/A'
+                                breach_row['Case Id'],
+                                breach_row['Current User Id'],
+                                breach_row['Case Start Date'].strftime('%Y-%m-%d'),
+                                f"{breach_row['Age (Days)']} days",
+                                int(breach_row['Ticket Number']) if not pd.isna(breach_row['Ticket Number']) else 'N/A',
+                                breach_row['Type'] if not pd.isna(breach_row['Type']) else 'N/A'
                             ]
                         }
                         
-                        # Add SR-related details
-                        if 'Ticket Number' in tracked_case_row and not pd.isna(tracked_case_row['Ticket Number']):
-                            details["Field"].extend(["Ticket Number", "Type"])
-                            details["Value"].extend([
-                                int(tracked_case_row['Ticket Number']),
-                                tracked_case_row['Type'] if not pd.isna(tracked_case_row['Type']) else 'N/A'
-                            ])
-                        
-                        # Add SR status if available
-                        if 'SR Status' in tracked_case_row and not pd.isna(tracked_case_row['SR Status']):
-                            details["Field"].append("SR Status")
-                            details["Value"].append(tracked_case_row['SR Status'])
+                        # Add SR Status if available
+                        if 'SR Status' in breach_row and not pd.isna(breach_row['SR Status']):
+                            breach_details["Field"].append("SR Status")
+                            breach_details["Value"].append(breach_row['SR Status'])
                             
-                            if 'Last Update' in tracked_case_row and not pd.isna(tracked_case_row['Last Update']):
-                                details["Field"].append("Last Update")
-                                details["Value"].append(tracked_case_row['Last Update'])
+                            if 'Last Update' in breach_row and not pd.isna(breach_row['Last Update']):
+                                breach_details["Field"].append("Last Update")
+                                breach_details["Value"].append(breach_row['Last Update'])
                         
-                        # Show case details table
-                        st.table(pd.DataFrame(details))
-                    
-                    with col2:
-                        # Note content
+                        # Display as a table
+                        st.table(pd.DataFrame(breach_details))
+                        
+                        # Display the full note
                         st.markdown("### Last Note")
-                        
-                        if 'Last Note' in tracked_case_row and not pd.isna(tracked_case_row['Last Note']):
-                            st.text_area("Note Content", tracked_case_row['Last Note'], height=250, key="tracked_note")
+                        if 'Last Note' in breach_row and not pd.isna(breach_row['Last Note']):
+                            st.text_area("Note Content", breach_row['Last Note'], height=200)
                         else:
                             st.info("No notes available for this case")
-                    
-                    # Button to remove this specific tracked item
-                    if st.button("Remove from Tracking", key="remove_single_tracked"):
-                        # Remove from tracked rows
-                        st.session_state.tracked_rows = [
-                            row for row in st.session_state.tracked_rows 
-                            if row['Case Id'] != selected_tracked_case
-                        ]
-                        
-                        st.success(f"Removed case {selected_tracked_case} from tracking!")
-                        st.rerun()
+            else:
+                st.warning("SLA Breach information not available. Please ensure your SR Status file contains breach data.")
     
     #
     # TODAY'S SR/INCIDENTS TAB
     #
     elif selected == "Today's SR/Incidents":
-        st.title("📆 Today's New SR/Incidents")
+        st.title("📅 Today's SR/Incidents")
         
-        # Get all items created today
-        df_today = df_enriched[df_enriched['Created Today'] == True].copy()
-        
-        # Display summary statistics
-        st.subheader("📊 Today's Activity Summary")
-        
-        # Statistics in cards
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            sr_count = len(df_today[df_today['Type'] == 'SR'])
-            st.markdown(f'<p class="metric-value">{sr_count}</p>', unsafe_allow_html=True)
-            st.markdown('<p class="metric-label">New Service Requests Today</p>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            incident_count = len(df_today[df_today['Type'] == 'Incident'])
-            st.markdown(f'<p class="metric-value">{incident_count}</p>', unsafe_allow_html=True)
-            st.markdown('<p class="metric-label">New Incidents Today</p>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            total_count = len(df_today)
-            st.markdown(f'<p class="metric-value">{total_count}</p>', unsafe_allow_html=True)
-            st.markdown('<p class="metric-label">Total New Items Today</p>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Display today's items
-        st.subheader("📋 Today's New Items")
-        
-        if df_today.empty:
-            st.info("No new SR/Incidents found for today.")
-        else:
-            # Filter options
-            today_filter_col1, today_filter_col2 = st.columns(2)
+        # Filter to get today's entries
+        if 'Created Today' in df_enriched.columns:
+            today_df = df_enriched[df_enriched['Created Today'] == True].copy()
             
-            with today_filter_col1:
-                today_type_filter = st.selectbox(
-                    "Filter by Type",
-                    ["All", "SR", "Incident"],
-                    key="today_type_filter"
-                )
+            # Display summary statistics
+            st.subheader("📊 Today's Activity Summary")
             
-            with today_filter_col2:
-                today_user_filter = st.selectbox(
-                    "Filter by User",
-                    ["All"] + df_today['Current User Id'].dropna().unique().tolist(),
-                    key="today_user_filter"
-                )
+            # Statistics cards
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                today_count = len(today_df)
+                st.markdown(f'<p class="metric-value">{today_count}</p>', unsafe_allow_html=True)
+                st.markdown('<p class="metric-label">Total Today\'s Activities</p>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                sr_count = len(today_df[today_df['Type'] == 'SR'])
+                st.markdown(f'<p class="metric-value">{sr_count}</p>', unsafe_allow_html=True)
+                st.markdown('<p class="metric-label">Today\'s SRs</p>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                incident_count = len(today_df[today_df['Type'] == 'Incident'])
+                st.markdown(f'<p class="metric-value">{incident_count}</p>', unsafe_allow_html=True)
+                st.markdown('<p class="metric-label">Today\'s Incidents</p>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Filtering options for today's data
+            st.subheader("🔍 Filter Today's Activities")
+            
+            filter_col1, filter_col2 = st.columns(2)
+            
+            with filter_col1:
+                today_type_options = ["All", "SR", "Incident"]
+                today_type_filter = st.selectbox("Filter by Type", today_type_options)
+            
+            with filter_col2:
+                if 'Current User Id' in today_df.columns:
+                    today_user_options = ["All"] + today_df['Current User Id'].dropna().unique().tolist()
+                    today_user_filter = st.selectbox("Filter by User", today_user_options)
+                else:
+                    today_user_filter = "All"
             
             # Apply filters
-            df_today_filtered = df_today.copy()
+            filtered_today_df = today_df.copy()
             
             if today_type_filter != "All":
-                df_today_filtered = df_today_filtered[df_today_filtered['Type'] == today_type_filter]
+                filtered_today_df = filtered_today_df[filtered_today_df['Type'] == today_type_filter]
             
-            if today_user_filter != "All":
-                df_today_filtered = df_today_filtered[df_today_filtered['Current User Id'] == today_user_filter]
+            if today_user_filter != "All" and 'Current User Id' in filtered_today_df.columns:
+                filtered_today_df = filtered_today_df[filtered_today_df['Current User Id'] == today_user_filter]
             
-            # Display filtered results
-            st.markdown(f"**Filtered Results:** {len(df_today_filtered)} items")
+            # Today's data table
+            st.subheader("📋 Today's Activities Details")
             
-            # Download button
-            if not df_today_filtered.empty:
-                st.download_button(
-                    label="📥 Download Today's Items",
-                    data=generate_excel_download(df_today_filtered),
-                    file_name=f"today_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if filtered_today_df.empty:
+                st.info("No activities found today matching the current filters.")
+            else:
+                # Results count and download button
+                results_col1, results_col2 = st.columns([3, 1])
+                
+                with results_col1:
+                    st.markdown(f"**Total Today's Records:** {filtered_today_df.shape[0]}")
+                
+                with results_col2:
+                    excel_data = generate_excel_download(filtered_today_df)
+                    st.download_button(
+                        label="📥 Download Today's Data",
+                        data=excel_data,
+                        file_name=f"today_activities_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                
+                # Important columns for today's display
+                today_display_cols = ['Case Id', 'Current User Id', 'Case Start Date', 'Type', 'Ticket Number', 'Status']
+                
+                # Add SR Status columns if available
+                if 'SR Status' in filtered_today_df.columns:
+                    today_display_cols.extend(['SR Status', 'Last Update'])
+                
+                # Ensure all columns exist
+                today_display_cols = [col for col in today_display_cols if col in filtered_today_df.columns]
+                
+                # Display today's data
+                st.dataframe(filtered_today_df[today_display_cols], hide_index=True)
+                
+                # Detailed today's case viewer
+                st.subheader("🔍 Today's Case Details")
+                
+                selected_today_case = st.selectbox(
+                    "Select a case to view details:",
+                    filtered_today_df['Case Id'].tolist()
                 )
-            
-            # Display columns
-            display_cols = ['Case Id', 'Case Start Date','Last Note', 'Last Note Date', 'Status', 'Type', 'Ticket Number']
-            
-            # Include SR Status if available
-            # if 'SR Status' in df_today_filtered.columns:
-            #     display_cols.extend(['SR Status', 'Last Note Date'])
-            
-            # Filter columns that exist in the dataframe
-            display_cols = [col for col in display_cols if col in df_today_filtered.columns]
-            
-            # Display the data
-            st.dataframe(df_today_filtered[display_cols], hide_index=True)
-            
-            # Add tracking functionality
-            st.subheader("🔍 Track Today's Items")
-            
-            # Select items to track
-            selected_case_today = st.selectbox(
-                "Select a case to view details or track:",
-                df_today_filtered['Case Id'].tolist(),
-                key="today_case_select"
-            )
-            
-            if selected_case_today:
-                today_case_row = df_today_filtered[df_today_filtered['Case Id'] == selected_case_today].iloc[0]
                 
-                # Display case details
-                st.markdown("### Case Details")
-                
-                # Create columns for layout
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Case information
-                    details = {
-                        "Field": ["Case ID", "Owner", "Start Date"],
+                if selected_today_case:
+                    today_row = filtered_today_df[filtered_today_df['Case Id'] == selected_today_case].iloc[0]
+                    
+                    # Display case details in a table
+                    today_details = {
+                        "Field": ["Case ID", "Owner", "Start Date", "Type", "Ticket Number", "Status"],
                         "Value": [
-                            today_case_row['Case Id'],
-                            today_case_row['Current User Id'],
-                            today_case_row['Case Start Date'].strftime('%Y-%m-%d') if not pd.isna(today_case_row['Case Start Date']) else 'N/A'
+                            today_row['Case Id'],
+                            today_row['Current User Id'],
+                            today_row['Case Start Date'].strftime('%Y-%m-%d'),
+                            today_row['Type'] if not pd.isna(today_row['Type']) else 'N/A',
+                            int(today_row['Ticket Number']) if not pd.isna(today_row['Ticket Number']) else 'N/A',
+                            today_row['Status']
                         ]
                     }
                     
-                    # Add SR-related details
-                    if 'Ticket Number' in today_case_row and not pd.isna(today_case_row['Ticket Number']):
-                        details["Field"].extend(["Ticket Number", "Type"])
-                        details["Value"].extend([
-                            int(today_case_row['Ticket Number']),
-                            today_case_row['Type'] if not pd.isna(today_case_row['Type']) else 'N/A'
-                        ])
-                    
-                    # Add SR status if available
-                    if 'SR Status' in today_case_row and not pd.isna(today_case_row['SR Status']):
-                        details["Field"].append("SR Status")
-                        details["Value"].append(today_case_row['SR Status'])
+                    # Add SR Status if available
+                    if 'SR Status' in today_row and not pd.isna(today_row['SR Status']):
+                        today_details["Field"].append("SR Status")
+                        today_details["Value"].append(today_row['SR Status'])
                         
-                        if 'Last Update' in today_case_row and not pd.isna(today_case_row['Last Update']):
-                            details["Field"].append("Last Update")
-                            details["Value"].append(today_case_row['Last Update'])
+                        if 'Last Update' in today_row and not pd.isna(today_row['Last Update']):
+                            today_details["Field"].append("Last Update")
+                            today_details["Value"].append(today_row['Last Update'])
                     
-                    # Show case details table
-                    st.table(pd.DataFrame(details))
-                
-                with col2:
-                    # Note content
+                    # Display as a table
+                    st.table(pd.DataFrame(today_details))
+                    
+                    # Display the full note
                     st.markdown("### Last Note")
-                    
-                    if 'Last Note' in today_case_row and not pd.isna(today_case_row['Last Note']):
-                        st.text_area("Note Content", today_case_row['Last Note'], height=250, key="today_note")
+                    if 'Last Note' in today_row and not pd.isna(today_row['Last Note']):
+                        st.text_area("Note Content", today_row['Last Note'], height=200)
                     else:
                         st.info("No notes available for this case")
-                
-                # Check if item is already tracked
-                is_tracked = today_case_row['Case Id'] in [row['Case Id'] for row in st.session_state.tracked_rows]
-                
-                # Track/untrack button
-                track_button_label = "🔄 Remove from Tracking" if is_tracked else "✅ Add to Tracking"
-                
-                if st.button(track_button_label, key="today_track_button"):
-                    track_row(today_case_row)
-                    st.success(f"Case {today_case_row['Case Id']} {'removed from' if is_tracked else 'added to'} tracking!")
-                    st.rerun()
+        else:
+            st.warning("Today's data not available. Please ensure your main data includes 'Last Note Date' column.")
 
-# Run the app
-if __name__ == "__main__":
-    pass  # The Streamlit script is run directly when imported
+# Add footer
+st.markdown("---")
+st.markdown(
+    """<div style="text-align:center; color:#888; font-size:0.8em;">
+    SR Analyzer Pro v1.0 | Developed by Ali Babiker | © 2025
+    </div>""",
+    unsafe_allow_html=True
+)
