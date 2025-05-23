@@ -462,7 +462,7 @@ else:
                 df_status_valid = df_enriched.dropna(subset=['SR Status'])
                 
                 # All SR status count
-                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='All SR Count')
+                sr_all_counts = df_status_valid['SR Status'].value_counts().rename_axis('SR Status').reset_index(name='Cases Count')
                 
                 # Unique SRs
                 sr_unique = df_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'SR Status']].drop_duplicates()
