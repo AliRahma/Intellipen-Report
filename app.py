@@ -5,6 +5,7 @@ import re
 import io
 import base64
 from datetime import datetime, timedelta
+import pytz
 from streamlit_option_menu import option_menu
 
 # Set page configuration
@@ -205,7 +206,7 @@ def generate_excel_download(data):
 
 # Sidebar - File Upload Section
 with st.sidebar:
-    st.title("📊 SR Analyzer Pro")
+    st.title("📊 SR Analyzer Pro TeeesT")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
@@ -228,6 +229,8 @@ with st.sidebar:
         st.success(f"SR status data loaded: {sr_df.shape[0]} records")
     
     # Display last upload time
+    abu_dhabi_tz = pytz.timezone('Asia/Dubai')
+    st.session_state.last_upload_time = datetime.now(abu_dhabi_tz).strftime("%Y-%m-%d %H:%M:%S")
     if st.session_state.last_upload_time:
         st.info(f"Last upload: {st.session_state.last_upload_time}")
     
