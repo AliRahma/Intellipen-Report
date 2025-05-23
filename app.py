@@ -206,7 +206,7 @@ def generate_excel_download(data):
 
 # Sidebar - File Upload Section
 with st.sidebar:
-    st.title("📊 SR Analyzer Pro TeeesT")
+    st.title("📊 SR Analyzer Pro")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
