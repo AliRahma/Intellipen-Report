@@ -212,9 +212,9 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("📁 Data Import")
-    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx","xls"])
-    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
-    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx","xls"])
+    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx"])
+    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx"])
+    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx"])
     
     if uploaded_file:
         with st.spinner("Loading main data..."):
