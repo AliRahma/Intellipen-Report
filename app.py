@@ -13,7 +13,7 @@ from utils import calculate_team_status_summary
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen Analyzer",
+    page_title="Intellipen Analyzer Test",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -241,7 +241,7 @@ def generate_excel_download(data):
 
 # Sidebar - File Upload Section
 with st.sidebar:
-    st.title("📊 Intellipen Analyzer Pro")
+    st.title("📊 Intellipen Analyzer Pro Test")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
@@ -1485,7 +1485,41 @@ else:
                     st.info("No incident data available to display the status pie chart.")
             else:
                 st.warning("Cannot display Percentage of Closed Incidents: 'Status' column missing from source data.")
-
+        # --- Team Assignment Distribution ---
+        st.markdown("---") # Visual separator
+        st.subheader("Team Assignment Distribution")
+        if not filtered_overview_df.empty:
+            if 'Team' in filtered_overview_df.columns:
+                team_distribution_data = filtered_overview_df['Team'].value_counts()
+                
+                if not team_distribution_data.empty:
+                    fig_team_dist = px.pie(
+                        team_distribution_data,
+                        names=team_distribution_data.index,
+                        values=team_distribution_data.values,
+                        title="Distribution of Incidents by Team"
+                    )
+                    fig_team_dist.update_traces(textposition='inside', textinfo='percent+label')
+                    st.plotly_chart(fig_team_dist, use_container_width=True)
+                else:
+                    st.info("No team assignment data to display based on current filters.")
+            else:
+                st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
+        else:
+            st.info("No data available to display for Team Assignment Distribution based on current filters.")
+        # --- Incidents by Team and Status Table ---
+        st.markdown("---") # Visual separator
+        st.subheader("Incidents by Team and Status")
+        # Check if 'Team' or 'Status' column was missing when team_status_summary_df was created.
+        # This check is based on the columns available in filtered_overview_df, which was used to create team_status_summary_df.
+        if 'Team' not in filtered_overview_df.columns or 'Status' not in filtered_overview_df.columns:
+            st.warning("The 'Team' or 'Status' column is missing in the uploaded incident data, so the 'Incidents by Team and Status' table cannot be generated.")
+        elif not team_status_summary_df.empty:
+            st.dataframe(team_status_summary_df, use_container_width=True, hide_index=True)
+        else:
+            # This case means columns existed, but the dataframe is empty (e.g., due to filters or no matching data)
+            st.info("No incident data to display in the 'Incidents by Team and Status' table based on current filters or data availability.")
+         
         # --- New Filtered Incident Details Table ---
         st.markdown("---") # Separator before the new table
         st.subheader("Filtered Incident Details")
@@ -1579,43 +1613,7 @@ else:
 
         else:
             st.info("No data to display in the 'Filtered Incident Details' table based on current filters.")
-        
-        # --- Team Assignment Distribution ---
-        st.markdown("---") # Visual separator
-        st.subheader("Team Assignment Distribution")
-        if not filtered_overview_df.empty:
-            if 'Team' in filtered_overview_df.columns:
-                team_distribution_data = filtered_overview_df['Team'].value_counts()
-                
-                if not team_distribution_data.empty:
-                    fig_team_dist = px.pie(
-                        team_distribution_data,
-                        names=team_distribution_data.index,
-                        values=team_distribution_data.values,
-                        title="Distribution of Incidents by Team"
-                    )
-                    fig_team_dist.update_traces(textposition='inside', textinfo='percent+label')
-                    st.plotly_chart(fig_team_dist, use_container_width=True)
-                else:
-                    st.info("No team assignment data to display based on current filters.")
-            else:
-                st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
-        else:
-            st.info("No data available to display for Team Assignment Distribution based on current filters.")
-
-        # --- Incidents by Team and Status Table ---
-        st.markdown("---") # Visual separator
-        st.subheader("Incidents by Team and Status")
-        # Check if 'Team' or 'Status' column was missing when team_status_summary_df was created.
-        # This check is based on the columns available in filtered_overview_df, which was used to create team_status_summary_df.
-        if 'Team' not in filtered_overview_df.columns or 'Status' not in filtered_overview_df.columns:
-            st.warning("The 'Team' or 'Status' column is missing in the uploaded incident data, so the 'Incidents by Team and Status' table cannot be generated.")
-        elif not team_status_summary_df.empty:
-            st.dataframe(team_status_summary_df, use_container_width=True, hide_index=True)
-        else:
-            # This case means columns existed, but the dataframe is empty (e.g., due to filters or no matching data)
-            st.info("No incident data to display in the 'Incidents by Team and Status' table based on current filters or data availability.")
-            
+   
         # --- High-Priority Incidents Table (remains, now affected by Status filter too) ---
         st.markdown("---")
         st.subheader("High-Priority Incidents (P1 & P2)")
