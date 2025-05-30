@@ -13,7 +13,7 @@ from utils import calculate_team_status_summary
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen Analyzer Test",
+    page_title="Intellipen Analyzer",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -241,7 +241,7 @@ def generate_excel_download(data):
 
 # Sidebar - File Upload Section
 with st.sidebar:
-    st.title("📊 Intellipen Analyzer Pro Test")
+    st.title("📊 Intellipen Analyzer Pro")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
