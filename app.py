@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
 import plotly.express as px
+from utils import calculate_team_status_summary
 
 # Set page configuration
 st.set_page_config(
@@ -315,61 +316,69 @@ with st.sidebar:
 
         # Initialization of session state for the widget
         if 'sidebar_user_widget_selection_controlled' not in st.session_state:
-            temp_initial_defaults = list(default_users)
+            # default_users is a hardcoded list, filtered against all_users
+            # Initially, selected_users for filtering should be these defaults.
+            st.session_state.selected_users = list(default_users)
 
-            if set(temp_initial_defaults) == set(all_users) and all_users:
-                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION] + list(all_users)
+            if not default_users and all_users: # If default_users is empty (e.g. hardcoded ones not in all_users) AND there are users, select all
                 st.session_state.selected_users = list(all_users)
-            elif not temp_initial_defaults and all_users:
-                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION] + list(all_users)
-                st.session_state.selected_users = list(all_users)
-            else:
-                st.session_state.sidebar_user_widget_selection_controlled = list(temp_initial_defaults)
-                st.session_state.selected_users = list(temp_initial_defaults)
+                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
+            elif all_users and set(default_users) == set(all_users): # If default_users happens to be all users
+                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
+            elif not all_users: # If there are no users at all
+                 st.session_state.selected_users = []
+                 st.session_state.sidebar_user_widget_selection_controlled = []
+            else: # Default users are a subset of all_users
+                st.session_state.sidebar_user_widget_selection_controlled = list(default_users)
 
-        # Prepare options and default for st.multiselect
         options_for_user_widget = [SELECT_ALL_USERS_OPTION] + all_users
-        current_selection_for_widget_display = st.session_state.sidebar_user_widget_selection_controlled
 
         # Call st.multiselect
         raw_widget_selection = st.multiselect(
-            "Select Users", # Original label
+            "Select Users",
             options=options_for_user_widget,
-            default=current_selection_for_widget_display,
-            key="multi_select_sidebar_users" # A unique key for the widget
+            default=st.session_state.sidebar_user_widget_selection_controlled,
+            key="multi_select_sidebar_users"
         )
 
         # Logic to process widget output and update session state
-        prev_widget_display_state = list(current_selection_for_widget_display)
-
+        prev_widget_display_state = list(st.session_state.sidebar_user_widget_selection_controlled)
         current_select_all_option_selected = SELECT_ALL_USERS_OPTION in raw_widget_selection
-        prev_select_all_option_selected = SELECT_ALL_USERS_OPTION in prev_widget_display_state
+        # prev_select_all_option_selected = SELECT_ALL_USERS_OPTION in prev_widget_display_state # Not needed with new logic directly
+        currently_selected_actual_items = [u for u in raw_widget_selection if u != SELECT_ALL_USERS_OPTION]
 
-        final_users_for_filtering = []
-        next_widget_display_state = list(raw_widget_selection)
+        # Determine if user explicitly clicked "Select All" or "Unselect All"
+        # This requires comparing raw_widget_selection with prev_widget_display_state carefully
 
-        if current_select_all_option_selected and not prev_select_all_option_selected:
-            final_users_for_filtering = list(all_users)
-            next_widget_display_state = [SELECT_ALL_USERS_OPTION] + list(all_users)
-        elif not current_select_all_option_selected and prev_select_all_option_selected:
-            final_users_for_filtering = []
-            next_widget_display_state = []
+        user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_USERS_OPTION not in prev_widget_display_state)
+        user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_USERS_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+
+        if user_clicked_select_all:
+            st.session_state.selected_users = list(all_users)
+            st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
+        elif user_clicked_unselect_all:
+            st.session_state.selected_users = []
+            st.session_state.sidebar_user_widget_selection_controlled = []
         else:
-            currently_selected_actual_users = [u for u in raw_widget_selection if u != SELECT_ALL_USERS_OPTION]
-
-            if current_select_all_option_selected:
-                if len(currently_selected_actual_users) < len(all_users):
-                    next_widget_display_state = list(currently_selected_actual_users)
-                    final_users_for_filtering = list(currently_selected_actual_users)
+            # Handle individual selections or deselections
+            if current_select_all_option_selected: # "[Select All]" is in raw_widget_selection
+                # This means user de-selected an item while "[Select All]" was (or became) part of raw_widget_selection
+                # Or, user selected all items manually, then also clicked "[Select All]" (which is redundant)
+                # If an item was deselected, "[Select All]" should be removed from display, and actual items shown.
+                if len(currently_selected_actual_items) < len(all_users):
+                    st.session_state.selected_users = list(currently_selected_actual_items)
+                    st.session_state.sidebar_user_widget_selection_controlled = list(currently_selected_actual_items)
+                else: # All items are selected, and "[Select All]" is present
+                    st.session_state.selected_users = list(all_users)
+                    st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
+            else: # "[Select All]" is NOT in raw_widget_selection
+                st.session_state.selected_users = list(currently_selected_actual_items)
+                if all_users and set(currently_selected_actual_items) == set(all_users):
+                    # All items were individually selected
+                    st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
                 else:
-                    final_users_for_filtering = list(all_users)
-            else:
-                final_users_for_filtering = list(currently_selected_actual_users)
-                if set(currently_selected_actual_users) == set(all_users) and all_users:
-                    next_widget_display_state = [SELECT_ALL_USERS_OPTION] + list(all_users)
-
-        st.session_state.selected_users = final_users_for_filtering
-        st.session_state.sidebar_user_widget_selection_controlled = next_widget_display_state
+                    st.session_state.sidebar_user_widget_selection_controlled = list(currently_selected_actual_items)
         
         # Date range filter
         if 'Case Start Date' in df_main.columns:
@@ -810,16 +819,18 @@ else:
             default_selected_cols = [col for col in default_selected_cols_initial if col in all_columns]
 
             if 'analysis_tab_column_widget_selection_controlled' not in st.session_state:
-                temp_initial_cols = list(default_selected_cols)
-                if all_columns and set(temp_initial_cols) == set(all_columns):
-                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+                st.session_state.selected_display_cols = list(default_selected_cols) # Actual columns to display
+
+                if not default_selected_cols and all_columns: # If default_selected_cols is empty and there are columns, select all
                     st.session_state.selected_display_cols = list(all_columns)
-                elif not temp_initial_cols and all_columns:
-                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
-                    st.session_state.selected_display_cols = list(all_columns)
-                else:
-                    st.session_state.analysis_tab_column_widget_selection_controlled = list(temp_initial_cols)
-                    st.session_state.selected_display_cols = list(temp_initial_cols)
+                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION]
+                elif all_columns and set(default_selected_cols) == set(all_columns): # If default_selected_cols happens to be all columns
+                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION]
+                elif not all_columns: # If there are no columns at all
+                    st.session_state.selected_display_cols = []
+                    st.session_state.analysis_tab_column_widget_selection_controlled = []
+                else: # Default columns are a subset
+                    st.session_state.analysis_tab_column_widget_selection_controlled = list(default_selected_cols)
 
             options_for_cols_widget = [SELECT_ALL_COLS_ANALYSIS_OPTION] + all_columns
             raw_cols_widget_selection = st.multiselect(
@@ -829,35 +840,35 @@ else:
                 key="multi_select_analysis_columns"
             )
 
-            prev_cols_widget_display_state = list(st.session_state.analysis_tab_column_widget_selection_controlled)
-            current_cols_select_all_selected = SELECT_ALL_COLS_ANALYSIS_OPTION in raw_cols_widget_selection
-            prev_cols_select_all_selected = SELECT_ALL_COLS_ANALYSIS_OPTION in prev_cols_widget_display_state
-            final_cols_for_display = []
-            next_cols_widget_display_state = list(raw_cols_widget_selection)
+            prev_widget_display_state = list(st.session_state.analysis_tab_column_widget_selection_controlled)
+            current_select_all_option_selected = SELECT_ALL_COLS_ANALYSIS_OPTION in raw_cols_widget_selection
+            currently_selected_actual_items = [c for c in raw_cols_widget_selection if c != SELECT_ALL_COLS_ANALYSIS_OPTION]
 
-            if current_cols_select_all_selected and not prev_cols_select_all_selected:
-                final_cols_for_display = list(all_columns)
-                next_cols_widget_display_state = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
-            elif not current_cols_select_all_selected and prev_cols_select_all_selected:
-                final_cols_for_display = []
-                next_cols_widget_display_state = []
+            user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_COLS_ANALYSIS_OPTION not in prev_widget_display_state)
+            user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_COLS_ANALYSIS_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+            if user_clicked_select_all:
+                st.session_state.selected_display_cols = list(all_columns)
+                st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION]
+            elif user_clicked_unselect_all:
+                st.session_state.selected_display_cols = []
+                st.session_state.analysis_tab_column_widget_selection_controlled = []
             else:
-                current_selected_actual_cols = [c for c in raw_cols_widget_selection if c != SELECT_ALL_COLS_ANALYSIS_OPTION]
-                if current_cols_select_all_selected:
-                    if len(current_selected_actual_cols) < len(all_columns):
-                        next_cols_widget_display_state = list(current_selected_actual_cols)
-                        final_cols_for_display = list(current_selected_actual_cols)
+                if current_select_all_option_selected:
+                    if len(currently_selected_actual_items) < len(all_columns):
+                        st.session_state.selected_display_cols = list(currently_selected_actual_items)
+                        st.session_state.analysis_tab_column_widget_selection_controlled = list(currently_selected_actual_items)
                     else:
-                        final_cols_for_display = list(all_columns)
+                        st.session_state.selected_display_cols = list(all_columns)
+                        st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION]
                 else:
-                    final_cols_for_display = list(current_selected_actual_cols)
-                    if set(current_selected_actual_cols) == set(all_columns) and all_columns:
-                        next_cols_widget_display_state = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+                    st.session_state.selected_display_cols = list(currently_selected_actual_items)
+                    if all_columns and set(currently_selected_actual_items) == set(all_columns):
+                        st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION]
+                    else:
+                        st.session_state.analysis_tab_column_widget_selection_controlled = list(currently_selected_actual_items)
 
-            st.session_state.selected_display_cols = final_cols_for_display
-            st.session_state.analysis_tab_column_widget_selection_controlled = next_cols_widget_display_state
-
-            columns_to_show = st.session_state.get('selected_display_cols', all_columns)
+            columns_to_show = st.session_state.get('selected_display_cols', []) # Default to empty list if not set
             if not columns_to_show and all_columns:
                  columns_to_show = all_columns
 
@@ -1235,12 +1246,11 @@ else:
                 SELECT_ALL_CREATORS_OPTION = SELECT_ALL_BASE_STRING % "Creators"
 
                 if 'incident_creator_widget_selection_controlled' not in st.session_state:
-                    if unique_creators:
-                        st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
-                        st.session_state.selected_creators = list(unique_creators)
-                    else:
+                    st.session_state.selected_creators = list(unique_creators) # Default to all selected for filtering
+                    if unique_creators: # If there are actual creators
+                        st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION]
+                    else: # No creators
                         st.session_state.incident_creator_widget_selection_controlled = []
-                        st.session_state.selected_creators = []
 
                 options_for_creator_widget = [SELECT_ALL_CREATORS_OPTION] + unique_creators
                 raw_creator_widget_selection = st.multiselect(
@@ -1250,32 +1260,33 @@ else:
                     key="multi_select_incident_creator"
                 )
 
-                prev_creator_widget_display_state = list(st.session_state.incident_creator_widget_selection_controlled)
-                current_creator_select_all_selected = SELECT_ALL_CREATORS_OPTION in raw_creator_widget_selection
-                prev_creator_select_all_selected = SELECT_ALL_CREATORS_OPTION in prev_creator_widget_display_state
-                final_creators_for_filtering = []
-                next_creator_widget_display_state = list(raw_creator_widget_selection)
+                prev_widget_display_state = list(st.session_state.incident_creator_widget_selection_controlled)
+                current_select_all_option_selected = SELECT_ALL_CREATORS_OPTION in raw_creator_widget_selection
+                currently_selected_actual_items = [c for c in raw_creator_widget_selection if c != SELECT_ALL_CREATORS_OPTION]
 
-                if current_creator_select_all_selected and not prev_creator_select_all_selected:
-                    final_creators_for_filtering = list(unique_creators)
-                    next_creator_widget_display_state = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
-                elif not current_creator_select_all_selected and prev_creator_select_all_selected:
-                    final_creators_for_filtering = []
-                    next_creator_widget_display_state = []
+                user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_CREATORS_OPTION not in prev_widget_display_state)
+                user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_CREATORS_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+                if user_clicked_select_all:
+                    st.session_state.selected_creators = list(unique_creators)
+                    st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION]
+                elif user_clicked_unselect_all:
+                    st.session_state.selected_creators = []
+                    st.session_state.incident_creator_widget_selection_controlled = []
                 else:
-                    current_selected_actual_creators = [c for c in raw_creator_widget_selection if c != SELECT_ALL_CREATORS_OPTION]
-                    if current_creator_select_all_selected:
-                        if len(current_selected_actual_creators) < len(unique_creators):
-                            next_creator_widget_display_state = list(current_selected_actual_creators)
-                            final_creators_for_filtering = list(current_selected_actual_creators)
+                    if current_select_all_option_selected:
+                        if len(currently_selected_actual_items) < len(unique_creators):
+                            st.session_state.selected_creators = list(currently_selected_actual_items)
+                            st.session_state.incident_creator_widget_selection_controlled = list(currently_selected_actual_items)
                         else:
-                            final_creators_for_filtering = list(unique_creators)
+                            st.session_state.selected_creators = list(unique_creators)
+                            st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION]
                     else:
-                        final_creators_for_filtering = list(current_selected_actual_creators)
-                        if set(current_selected_actual_creators) == set(unique_creators) and unique_creators:
-                            next_creator_widget_display_state = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
-                st.session_state.selected_creators = final_creators_for_filtering
-                st.session_state.incident_creator_widget_selection_controlled = next_creator_widget_display_state
+                        st.session_state.selected_creators = list(currently_selected_actual_items)
+                        if unique_creators and set(currently_selected_actual_items) == set(unique_creators):
+                            st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION]
+                        else:
+                            st.session_state.incident_creator_widget_selection_controlled = list(currently_selected_actual_items)
 
             with col2:
                 if 'Team' in overview_df.columns:
@@ -1286,12 +1297,11 @@ else:
                 SELECT_ALL_TEAMS_OPTION = SELECT_ALL_BASE_STRING % "Teams"
 
                 if 'incident_team_widget_selection_controlled' not in st.session_state:
-                    if unique_teams:
-                        st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
-                        st.session_state.selected_teams = list(unique_teams)
-                    else:
+                    st.session_state.selected_teams = list(unique_teams) # Default to all selected for filtering
+                    if unique_teams: # If there are actual teams
+                        st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
+                    else: # No teams
                         st.session_state.incident_team_widget_selection_controlled = []
-                        st.session_state.selected_teams = []
 
                 options_for_team_widget = [SELECT_ALL_TEAMS_OPTION] + unique_teams
                 raw_team_widget_selection = st.multiselect(
@@ -1301,32 +1311,33 @@ else:
                     key="multi_select_incident_team"
                 )
 
-                prev_team_widget_display_state = list(st.session_state.incident_team_widget_selection_controlled)
-                current_team_select_all_selected = SELECT_ALL_TEAMS_OPTION in raw_team_widget_selection
-                prev_team_select_all_selected = SELECT_ALL_TEAMS_OPTION in prev_team_widget_display_state
-                final_teams_for_filtering = []
-                next_team_widget_display_state = list(raw_team_widget_selection)
+                prev_widget_display_state = list(st.session_state.incident_team_widget_selection_controlled)
+                current_select_all_option_selected = SELECT_ALL_TEAMS_OPTION in raw_team_widget_selection
+                currently_selected_actual_items = [t for t in raw_team_widget_selection if t != SELECT_ALL_TEAMS_OPTION]
 
-                if current_team_select_all_selected and not prev_team_select_all_selected:
-                    final_teams_for_filtering = list(unique_teams)
-                    next_team_widget_display_state = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
-                elif not current_team_select_all_selected and prev_team_select_all_selected:
-                    final_teams_for_filtering = []
-                    next_team_widget_display_state = []
+                user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_TEAMS_OPTION not in prev_widget_display_state)
+                user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_TEAMS_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+                if user_clicked_select_all:
+                    st.session_state.selected_teams = list(unique_teams)
+                    st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
+                elif user_clicked_unselect_all:
+                    st.session_state.selected_teams = []
+                    st.session_state.incident_team_widget_selection_controlled = []
                 else:
-                    current_selected_actual_teams = [t for t in raw_team_widget_selection if t != SELECT_ALL_TEAMS_OPTION]
-                    if current_team_select_all_selected:
-                        if len(current_selected_actual_teams) < len(unique_teams):
-                            next_team_widget_display_state = list(current_selected_actual_teams)
-                            final_teams_for_filtering = list(current_selected_actual_teams)
+                    if current_select_all_option_selected:
+                        if len(currently_selected_actual_items) < len(unique_teams):
+                            st.session_state.selected_teams = list(currently_selected_actual_items)
+                            st.session_state.incident_team_widget_selection_controlled = list(currently_selected_actual_items)
                         else:
-                            final_teams_for_filtering = list(unique_teams)
+                            st.session_state.selected_teams = list(unique_teams)
+                            st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
                     else:
-                        final_teams_for_filtering = list(current_selected_actual_teams)
-                        if set(current_selected_actual_teams) == set(unique_teams) and unique_teams:
-                            next_team_widget_display_state = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
-                st.session_state.selected_teams = final_teams_for_filtering
-                st.session_state.incident_team_widget_selection_controlled = next_team_widget_display_state
+                        st.session_state.selected_teams = list(currently_selected_actual_items)
+                        if unique_teams and set(currently_selected_actual_items) == set(unique_teams):
+                            st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
+                        else:
+                            st.session_state.incident_team_widget_selection_controlled = list(currently_selected_actual_items)
 
             with col3:
                 if 'Priority' in overview_df.columns:
@@ -1337,12 +1348,11 @@ else:
                 SELECT_ALL_PRIORITIES_OPTION = SELECT_ALL_BASE_STRING % "Priorities"
 
                 if 'incident_priority_widget_selection_controlled' not in st.session_state:
-                    if unique_priorities:
-                        st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
-                        st.session_state.selected_priorities = list(unique_priorities)
-                    else:
+                    st.session_state.selected_priorities = list(unique_priorities) # Default to all selected for filtering
+                    if unique_priorities: # If there are actual priorities
+                        st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION]
+                    else: # No priorities
                         st.session_state.incident_priority_widget_selection_controlled = []
-                        st.session_state.selected_priorities = []
 
                 options_for_priority_widget = [SELECT_ALL_PRIORITIES_OPTION] + unique_priorities
                 raw_priority_widget_selection = st.multiselect(
@@ -1352,32 +1362,33 @@ else:
                     key="multi_select_incident_priority"
                 )
 
-                prev_priority_widget_display_state = list(st.session_state.incident_priority_widget_selection_controlled)
-                current_priority_select_all_selected = SELECT_ALL_PRIORITIES_OPTION in raw_priority_widget_selection
-                prev_priority_select_all_selected = SELECT_ALL_PRIORITIES_OPTION in prev_priority_widget_display_state
-                final_priorities_for_filtering = []
-                next_priority_widget_display_state = list(raw_priority_widget_selection)
+                prev_widget_display_state = list(st.session_state.incident_priority_widget_selection_controlled)
+                current_select_all_option_selected = SELECT_ALL_PRIORITIES_OPTION in raw_priority_widget_selection
+                currently_selected_actual_items = [p for p in raw_priority_widget_selection if p != SELECT_ALL_PRIORITIES_OPTION]
 
-                if current_priority_select_all_selected and not prev_priority_select_all_selected:
-                    final_priorities_for_filtering = list(unique_priorities)
-                    next_priority_widget_display_state = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
-                elif not current_priority_select_all_selected and prev_priority_select_all_selected:
-                    final_priorities_for_filtering = []
-                    next_priority_widget_display_state = []
+                user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_PRIORITIES_OPTION not in prev_widget_display_state)
+                user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_PRIORITIES_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+                if user_clicked_select_all:
+                    st.session_state.selected_priorities = list(unique_priorities)
+                    st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION]
+                elif user_clicked_unselect_all:
+                    st.session_state.selected_priorities = []
+                    st.session_state.incident_priority_widget_selection_controlled = []
                 else:
-                    current_selected_actual_priorities = [p for p in raw_priority_widget_selection if p != SELECT_ALL_PRIORITIES_OPTION]
-                    if current_priority_select_all_selected:
-                        if len(current_selected_actual_priorities) < len(unique_priorities):
-                            next_priority_widget_display_state = list(current_selected_actual_priorities)
-                            final_priorities_for_filtering = list(current_selected_actual_priorities)
+                    if current_select_all_option_selected:
+                        if len(currently_selected_actual_items) < len(unique_priorities):
+                            st.session_state.selected_priorities = list(currently_selected_actual_items)
+                            st.session_state.incident_priority_widget_selection_controlled = list(currently_selected_actual_items)
                         else:
-                            final_priorities_for_filtering = list(unique_priorities)
+                            st.session_state.selected_priorities = list(unique_priorities)
+                            st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION]
                     else:
-                        final_priorities_for_filtering = list(current_selected_actual_priorities)
-                        if set(current_selected_actual_priorities) == set(unique_priorities) and unique_priorities:
-                            next_priority_widget_display_state = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
-                st.session_state.selected_priorities = final_priorities_for_filtering
-                st.session_state.incident_priority_widget_selection_controlled = next_priority_widget_display_state
+                        st.session_state.selected_priorities = list(currently_selected_actual_items)
+                        if unique_priorities and set(currently_selected_actual_items) == set(unique_priorities):
+                            st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION]
+                        else:
+                            st.session_state.incident_priority_widget_selection_controlled = list(currently_selected_actual_items)
 
             with col4: # New column for Status filter
                 if 'Status' in overview_df.columns:
@@ -1392,16 +1403,18 @@ else:
                 SELECT_ALL_STATUSES_OPTION = SELECT_ALL_BASE_STRING % "Statuses"
 
                 if 'incident_status_widget_selection_controlled' not in st.session_state:
-                    temp_initial_statuses = list(default_selected_statuses) # Use app's original default
-                    if unique_statuses and set(temp_initial_statuses) == set(unique_statuses):
-                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
+                    st.session_state.selected_statuses = list(default_selected_statuses) # Actual statuses for filtering
+
+                    if not default_selected_statuses and unique_statuses: # If default_selected_statuses is empty and there are statuses, select all
                         st.session_state.selected_statuses = list(unique_statuses)
-                    elif not temp_initial_statuses and unique_statuses:
-                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
-                        st.session_state.selected_statuses = list(unique_statuses)
-                    else:
-                        st.session_state.incident_status_widget_selection_controlled = list(temp_initial_statuses)
-                        st.session_state.selected_statuses = list(temp_initial_statuses)
+                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION]
+                    elif unique_statuses and set(default_selected_statuses) == set(unique_statuses): # If default_selected_statuses happens to be all unique_statuses
+                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION]
+                    elif not unique_statuses: # If there are no statuses at all
+                        st.session_state.selected_statuses = []
+                        st.session_state.incident_status_widget_selection_controlled = []
+                    else: # Default statuses are a specific subset
+                        st.session_state.incident_status_widget_selection_controlled = list(default_selected_statuses)
 
                 options_for_status_widget = [SELECT_ALL_STATUSES_OPTION] + unique_statuses
                 raw_status_widget_selection = st.multiselect(
@@ -1411,32 +1424,33 @@ else:
                     key="multi_select_incident_status"
                 )
 
-                prev_status_widget_display_state = list(st.session_state.incident_status_widget_selection_controlled)
-                current_status_select_all_selected = SELECT_ALL_STATUSES_OPTION in raw_status_widget_selection
-                prev_status_select_all_selected = SELECT_ALL_STATUSES_OPTION in prev_status_widget_display_state
-                final_statuses_for_filtering = []
-                next_status_widget_display_state = list(raw_status_widget_selection)
+                prev_widget_display_state = list(st.session_state.incident_status_widget_selection_controlled)
+                current_select_all_option_selected = SELECT_ALL_STATUSES_OPTION in raw_status_widget_selection
+                currently_selected_actual_items = [s for s in raw_status_widget_selection if s != SELECT_ALL_STATUSES_OPTION]
 
-                if current_status_select_all_selected and not prev_status_select_all_selected:
-                    final_statuses_for_filtering = list(unique_statuses)
-                    next_status_widget_display_state = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
-                elif not current_status_select_all_selected and prev_status_select_all_selected:
-                    final_statuses_for_filtering = []
-                    next_status_widget_display_state = []
+                user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_STATUSES_OPTION not in prev_widget_display_state)
+                user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_STATUSES_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+                if user_clicked_select_all:
+                    st.session_state.selected_statuses = list(unique_statuses)
+                    st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION]
+                elif user_clicked_unselect_all:
+                    st.session_state.selected_statuses = []
+                    st.session_state.incident_status_widget_selection_controlled = []
                 else:
-                    current_selected_actual_statuses = [s for s in raw_status_widget_selection if s != SELECT_ALL_STATUSES_OPTION]
-                    if current_status_select_all_selected:
-                        if len(current_selected_actual_statuses) < len(unique_statuses):
-                            next_status_widget_display_state = list(current_selected_actual_statuses)
-                            final_statuses_for_filtering = list(current_selected_actual_statuses)
+                    if current_select_all_option_selected:
+                        if len(currently_selected_actual_items) < len(unique_statuses):
+                            st.session_state.selected_statuses = list(currently_selected_actual_items)
+                            st.session_state.incident_status_widget_selection_controlled = list(currently_selected_actual_items)
                         else:
-                            final_statuses_for_filtering = list(unique_statuses)
+                            st.session_state.selected_statuses = list(unique_statuses)
+                            st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION]
                     else:
-                        final_statuses_for_filtering = list(current_selected_actual_statuses)
-                        if set(current_selected_actual_statuses) == set(unique_statuses) and unique_statuses:
-                            next_status_widget_display_state = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
-                st.session_state.selected_statuses = final_statuses_for_filtering
-                st.session_state.incident_status_widget_selection_controlled = next_status_widget_display_state
+                        st.session_state.selected_statuses = list(currently_selected_actual_items)
+                        if unique_statuses and set(currently_selected_actual_items) == set(unique_statuses):
+                            st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION]
+                        else:
+                            st.session_state.incident_status_widget_selection_controlled = list(currently_selected_actual_items)
 
             # Apply filters
             filtered_overview_df = overview_df
@@ -1449,6 +1463,10 @@ else:
                 filtered_overview_df = filtered_overview_df[filtered_overview_df['Priority'].isin(st.session_state.selected_priorities)]
             if st.session_state.get('selected_statuses') and 'Status' in filtered_overview_df.columns: # Add status filter
                 filtered_overview_df = filtered_overview_df[filtered_overview_df['Status'].isin(st.session_state.selected_statuses)]
+
+            # Calculate team and status totals
+            team_status_summary_df = calculate_team_status_summary(filtered_overview_df)
+
                     # --- Pie Chart for Closed Incidents ---
             st.markdown("---") # Visual separator before the pie chart
             if 'Status' in overview_df.columns: # Ensure 'Status' column exists in the original overview_df
@@ -1486,16 +1504,18 @@ else:
 
                 # available_default_columns is defined above this block in the original code
                 if 'incident_tab_column_widget_selection_controlled' not in st.session_state:
-                    temp_initial_cols_incident = list(available_default_columns)
-                    if all_available_columns and set(temp_initial_cols_incident) == set(all_available_columns):
-                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
+                    st.session_state.selected_table_columns = list(available_default_columns) # Actual columns for table
+
+                    if not available_default_columns and all_available_columns: # If no defaults specified but columns exist, select all
                         st.session_state.selected_table_columns = list(all_available_columns)
-                    elif not temp_initial_cols_incident and all_available_columns:
-                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
-                        st.session_state.selected_table_columns = list(all_available_columns)
-                    else:
-                        st.session_state.incident_tab_column_widget_selection_controlled = list(temp_initial_cols_incident)
-                        st.session_state.selected_table_columns = list(temp_initial_cols_incident)
+                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION]
+                    elif all_available_columns and set(available_default_columns) == set(all_available_columns): # If defaults are all columns
+                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION]
+                    elif not all_available_columns: # No columns available at all
+                        st.session_state.selected_table_columns = []
+                        st.session_state.incident_tab_column_widget_selection_controlled = []
+                    else: # Defaults are a specific subset
+                        st.session_state.incident_tab_column_widget_selection_controlled = list(available_default_columns)
 
                 options_for_incident_cols_widget = [SELECT_ALL_COLS_INCIDENT_OPTION] + all_available_columns
                 raw_incident_cols_widget_selection = st.multiselect(
@@ -1505,33 +1525,33 @@ else:
                     key="multi_select_incident_overview_columns"
                 )
 
-                prev_incident_cols_widget_display_state = list(st.session_state.incident_tab_column_widget_selection_controlled)
-                current_incident_cols_select_all_selected = SELECT_ALL_COLS_INCIDENT_OPTION in raw_incident_cols_widget_selection
-                prev_incident_cols_select_all_selected = SELECT_ALL_COLS_INCIDENT_OPTION in prev_incident_cols_widget_display_state
-                final_incident_cols_for_display = []
-                next_incident_cols_widget_display_state = list(raw_incident_cols_widget_selection)
+                prev_widget_display_state = list(st.session_state.incident_tab_column_widget_selection_controlled)
+                current_select_all_option_selected = SELECT_ALL_COLS_INCIDENT_OPTION in raw_incident_cols_widget_selection
+                currently_selected_actual_items = [c for c in raw_incident_cols_widget_selection if c != SELECT_ALL_COLS_INCIDENT_OPTION]
 
-                if current_incident_cols_select_all_selected and not prev_incident_cols_select_all_selected:
-                    final_incident_cols_for_display = list(all_available_columns)
-                    next_incident_cols_widget_display_state = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
-                elif not current_incident_cols_select_all_selected and prev_incident_cols_select_all_selected:
-                    final_incident_cols_for_display = []
-                    next_incident_cols_widget_display_state = []
+                user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_COLS_INCIDENT_OPTION not in prev_widget_display_state)
+                user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_COLS_INCIDENT_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
+
+                if user_clicked_select_all:
+                    st.session_state.selected_table_columns = list(all_available_columns)
+                    st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION]
+                elif user_clicked_unselect_all:
+                    st.session_state.selected_table_columns = []
+                    st.session_state.incident_tab_column_widget_selection_controlled = []
                 else:
-                    current_selected_actual_incident_cols = [c for c in raw_incident_cols_widget_selection if c != SELECT_ALL_COLS_INCIDENT_OPTION]
-                    if current_incident_cols_select_all_selected:
-                        if len(current_selected_actual_incident_cols) < len(all_available_columns):
-                            next_incident_cols_widget_display_state = list(current_selected_actual_incident_cols)
-                            final_incident_cols_for_display = list(current_selected_actual_incident_cols)
+                    if current_select_all_option_selected:
+                        if len(currently_selected_actual_items) < len(all_available_columns):
+                            st.session_state.selected_table_columns = list(currently_selected_actual_items)
+                            st.session_state.incident_tab_column_widget_selection_controlled = list(currently_selected_actual_items)
                         else:
-                            final_incident_cols_for_display = list(all_available_columns)
+                            st.session_state.selected_table_columns = list(all_available_columns)
+                            st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION]
                     else:
-                        final_incident_cols_for_display = list(current_selected_actual_incident_cols)
-                        if set(current_selected_actual_incident_cols) == set(all_available_columns) and all_available_columns:
-                            next_incident_cols_widget_display_state = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
-
-                st.session_state.selected_table_columns = final_incident_cols_for_display
-                st.session_state.incident_tab_column_widget_selection_controlled = next_incident_cols_widget_display_state
+                        st.session_state.selected_table_columns = list(currently_selected_actual_items)
+                        if all_available_columns and set(currently_selected_actual_items) == set(all_available_columns):
+                            st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION]
+                        else:
+                            st.session_state.incident_tab_column_widget_selection_controlled = list(currently_selected_actual_items)
 
                 current_cols_to_display_incident_tab = st.session_state.get('selected_table_columns', [])
 
@@ -1582,6 +1602,19 @@ else:
                 st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
         else:
             st.info("No data available to display for Team Assignment Distribution based on current filters.")
+
+        # --- Incidents by Team and Status Table ---
+        st.markdown("---") # Visual separator
+        st.subheader("Incidents by Team and Status")
+        # Check if 'Team' or 'Status' column was missing when team_status_summary_df was created.
+        # This check is based on the columns available in filtered_overview_df, which was used to create team_status_summary_df.
+        if 'Team' not in filtered_overview_df.columns or 'Status' not in filtered_overview_df.columns:
+            st.warning("The 'Team' or 'Status' column is missing in the uploaded incident data, so the 'Incidents by Team and Status' table cannot be generated.")
+        elif not team_status_summary_df.empty:
+            st.dataframe(team_status_summary_df, use_container_width=True, hide_index=True)
+        else:
+            # This case means columns existed, but the dataframe is empty (e.g., due to filters or no matching data)
+            st.info("No incident data to display in the 'Incidents by Team and Status' table based on current filters or data availability.")
             
         # --- High-Priority Incidents Table (remains, now affected by Status filter too) ---
         st.markdown("---")
