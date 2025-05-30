@@ -1,4 +1,5 @@
 import streamlit as st
+import os
 import pandas as pd
 import numpy as np
 import re
@@ -7,10 +8,11 @@ import base64
 from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
+import plotly.express as px
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen Analyzer ",
+    page_title="Intellipen Analyzer",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -125,11 +127,41 @@ if 'selected_users' not in st.session_state:
     st.session_state.selected_users = []
 if 'selected_case_ids' not in st.session_state:
     st.session_state.selected_case_ids = []
+if 'incident_overview_df' not in st.session_state:
+    st.session_state.incident_overview_df = None
 
 # Function to load and process data
 @st.cache_data
 def load_data(file):
-    return pd.read_excel(file)
+    if file is None:
+        return None
+    
+    try:
+        file_name = file.name
+        file_extension = os.path.splitext(file_name)[1].lower()
+        
+        if file_extension == '.xls':
+            try:
+                # First attempt with xlrd
+                return pd.read_excel(file, engine='xlrd')
+            except Exception: # Catch errors from xlrd
+                try:
+                    file.seek(0) # Reset file pointer
+                    # Second attempt with openpyxl
+                    return pd.read_excel(file, engine='openpyxl')
+                except Exception as e_openpyxl:
+                    # If openpyxl also fails, raise the error to be caught by the main handler
+                    raise e_openpyxl
+            return pd.read_excel(file, engine='xlrd')
+
+        elif file_extension == '.xlsx':
+            return pd.read_excel(file, engine='openpyxl')
+        else:
+            raise ValueError("Unsupported file type. Please upload .xls or .xlsx files.")
+            
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        return None
 
 # Function to process main dataframe
 def process_main_df(df):
@@ -212,30 +244,51 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("📁 Data Import")
-    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx"])
-    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx"])
-    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx"])
+    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx","xls"])
+    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
+    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx","xls"])
     
     if uploaded_file:
         with st.spinner("Loading main data..."):
             df = load_data(uploaded_file)
-            st.session_state.main_df = process_main_df(df)
-            st.session_state.last_upload_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        st.success(f"Main data loaded: {df.shape[0]} records")
-        st.session_state.data_loaded = True
+            if df is not None:
+                st.session_state.main_df = process_main_df(df)
+                st.session_state.last_upload_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.success(f"Main data loaded: {df.shape[0]} records") # Ensure this is also within the check
+                st.session_state.data_loaded = True
     
     if sr_status_file:
         with st.spinner("Loading SR status data..."):
             sr_df = load_data(sr_status_file)
-            st.session_state.sr_df = sr_df
-        st.success(f"SR status data loaded: {sr_df.shape[0]} records")
+            if sr_df is not None: # Add this check
+                st.session_state.sr_df = sr_df
+                st.success(f"SR status data loaded: {sr_df.shape[0]} records")
     
     if incident_status_file:
         with st.spinner("Loading incident report data..."):
             incident_df = load_data(incident_status_file)
-            st.session_state.incident_df = incident_df
-        st.success(f"Incident report data loaded: {incident_df.shape[0]} records")
+            if incident_df is not None: # Add this check
+                st.session_state.incident_df = incident_df
+                st.success(f"Incident report data loaded: {incident_df.shape[0]} records")
+
+                # Process for Incident Overview tab
+                # Copy all columns from incident_df
+                overview_df = incident_df.copy()
+
+                # Rename "Customer" to "Creator" if "Customer" column exists
+                if "Customer" in overview_df.columns:
+                    overview_df.rename(columns={"Customer": "Creator"}, inplace=True)
+
+                # Store the full overview_df in session state
+                st.session_state.incident_overview_df = overview_df
+                st.success(f"Incident Overview data loaded: {len(overview_df)} records, {len(overview_df.columns)} columns.")
+
+                # Note: The old logic for 'required_cols' and 'missing_cols' check at this stage is removed.
+                # Specific column checks will be handled within the "Incident Overview" tab itself
+                # for UI elements that depend on them (e.g., filters, default table views).
+
+            else:
+                st.session_state.incident_overview_df = None # Ensure it's None if file loading failed
     
     # Display last upload time
     abu_dhabi_tz = pytz.timezone('Asia/Dubai')
@@ -253,28 +306,95 @@ with st.sidebar:
         df_main = st.session_state.main_df.copy()
         all_users = df_main['Current User Id'].dropna().unique().tolist()
         
+        # Define the "Select All" constant string
+        SELECT_ALL_USERS_OPTION = "[Select All Users]"
+
         # Multi-select for users
-        default_users = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa']
-        default_users = [u for u in default_users if u in all_users]  # Ensure defaults exist
-        
-        selected_users = st.multiselect(
-            "Select Users", 
-            options=all_users,
-            default=default_users
+        default_users_hardcoded = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa'] # Original hardcoded list
+        default_users = [u for u in default_users_hardcoded if u in all_users]  # Filtered against actual users
+
+        # Initialization of session state for the widget
+        if 'sidebar_user_widget_selection_controlled' not in st.session_state:
+            temp_initial_defaults = list(default_users)
+
+            if set(temp_initial_defaults) == set(all_users) and all_users:
+                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION] + list(all_users)
+                st.session_state.selected_users = list(all_users)
+            elif not temp_initial_defaults and all_users:
+                st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION] + list(all_users)
+                st.session_state.selected_users = list(all_users)
+            else:
+                st.session_state.sidebar_user_widget_selection_controlled = list(temp_initial_defaults)
+                st.session_state.selected_users = list(temp_initial_defaults)
+
+        # Prepare options and default for st.multiselect
+        options_for_user_widget = [SELECT_ALL_USERS_OPTION] + all_users
+        current_selection_for_widget_display = st.session_state.sidebar_user_widget_selection_controlled
+
+        # Call st.multiselect
+        raw_widget_selection = st.multiselect(
+            "Select Users", # Original label
+            options=options_for_user_widget,
+            default=current_selection_for_widget_display,
+            key="multi_select_sidebar_users" # A unique key for the widget
         )
-        st.session_state.selected_users = selected_users
+
+        # Logic to process widget output and update session state
+        prev_widget_display_state = list(current_selection_for_widget_display)
+
+        current_select_all_option_selected = SELECT_ALL_USERS_OPTION in raw_widget_selection
+        prev_select_all_option_selected = SELECT_ALL_USERS_OPTION in prev_widget_display_state
+
+        final_users_for_filtering = []
+        next_widget_display_state = list(raw_widget_selection)
+
+        if current_select_all_option_selected and not prev_select_all_option_selected:
+            final_users_for_filtering = list(all_users)
+            next_widget_display_state = [SELECT_ALL_USERS_OPTION] + list(all_users)
+        elif not current_select_all_option_selected and prev_select_all_option_selected:
+            final_users_for_filtering = []
+            next_widget_display_state = []
+        else:
+            currently_selected_actual_users = [u for u in raw_widget_selection if u != SELECT_ALL_USERS_OPTION]
+
+            if current_select_all_option_selected:
+                if len(currently_selected_actual_users) < len(all_users):
+                    next_widget_display_state = list(currently_selected_actual_users)
+                    final_users_for_filtering = list(currently_selected_actual_users)
+                else:
+                    final_users_for_filtering = list(all_users)
+            else:
+                final_users_for_filtering = list(currently_selected_actual_users)
+                if set(currently_selected_actual_users) == set(all_users) and all_users:
+                    next_widget_display_state = [SELECT_ALL_USERS_OPTION] + list(all_users)
+
+        st.session_state.selected_users = final_users_for_filtering
+        st.session_state.sidebar_user_widget_selection_controlled = next_widget_display_state
         
         # Date range filter
         if 'Case Start Date' in df_main.columns:
             min_date = df_main['Case Start Date'].min().date()
             max_date = df_main['Case Start Date'].max().date()
-            
-            date_range = st.date_input(
+
+            if 'sidebar_date_range_value' not in st.session_state:
+                st.session_state.sidebar_date_range_value = (min_date, max_date)
+
+            if st.button("Select Full Range", key="btn_select_full_date_range"):
+                st.session_state.sidebar_date_range_value = (min_date, max_date)
+                # Consider st.experimental_rerun() if needed, but often not required for direct value changes
+
+            current_date_range_from_widget = st.date_input(
                 "Date Range",
-                value=(min_date, max_date),
+                value=st.session_state.sidebar_date_range_value,
                 min_value=min_date,
-                max_value=max_date
+                max_value=max_date,
+                key="date_input_sidebar"
             )
+
+            if current_date_range_from_widget != st.session_state.sidebar_date_range_value:
+                st.session_state.sidebar_date_range_value = current_date_range_from_widget
+
+            date_range = st.session_state.sidebar_date_range_value
 
 # Main content
 if not st.session_state.data_loaded:
@@ -318,8 +438,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["Analysis", "SLA Breach", "Today's SR/Incidents"],
-        icons=["kanban", "exclamation-triangle", "shield-exclamation", "calendar-date"],
+        options=["Analysis", "SLA Breach", "Today's SR/Incidents", "Incident Overview"],
+        icons=["kanban", "exclamation-triangle", "calendar-date", "clipboard-data"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -674,23 +794,85 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         
-        # Display data table with important columns
-        important_cols = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Triage Status', 'Type', 'Ticket Number']
-        
-        # Add Status columns if available
-        if 'Status' in df_display.columns:
-            important_cols.extend(['Status', 'Last Update'])
-            if 'Breach Passed' in df_display.columns:
-                important_cols.append('Breach Passed')
-        
-        # Ensure all columns exist
-        display_cols = [col for col in important_cols if col in df_display.columns]
-        
-        # Prepare dataframe for display
+        # Display data table with customizable columns
         if not df_display.empty:
-            # Display with st.dataframe
-            st.dataframe(df_display[display_cols], hide_index=True)
-        
+            all_columns = df_display.columns.tolist()
+            SELECT_ALL_COLS_ANALYSIS_OPTION = "[Select All Columns]"
+
+            # Define default columns (original logic)
+            default_selected_cols_initial = ['Last Note', 'Case Id', 'Current User Id', 'Case Start Date', 'Triage Status', 'Type', 'Ticket Number']
+            if 'Status' in df_display.columns:
+                default_selected_cols_initial.extend(['Status', 'Last Update'])
+            if 'Breach Passed' in df_display.columns:
+                default_selected_cols_initial.append('Breach Passed')
+
+            # Ensure default columns are valid and exist in df_display
+            default_selected_cols = [col for col in default_selected_cols_initial if col in all_columns]
+
+            if 'analysis_tab_column_widget_selection_controlled' not in st.session_state:
+                temp_initial_cols = list(default_selected_cols)
+                if all_columns and set(temp_initial_cols) == set(all_columns):
+                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+                    st.session_state.selected_display_cols = list(all_columns)
+                elif not temp_initial_cols and all_columns:
+                    st.session_state.analysis_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+                    st.session_state.selected_display_cols = list(all_columns)
+                else:
+                    st.session_state.analysis_tab_column_widget_selection_controlled = list(temp_initial_cols)
+                    st.session_state.selected_display_cols = list(temp_initial_cols)
+
+            options_for_cols_widget = [SELECT_ALL_COLS_ANALYSIS_OPTION] + all_columns
+            raw_cols_widget_selection = st.multiselect(
+                "Select columns to display:",
+                options=options_for_cols_widget,
+                default=st.session_state.analysis_tab_column_widget_selection_controlled,
+                key="multi_select_analysis_columns"
+            )
+
+            prev_cols_widget_display_state = list(st.session_state.analysis_tab_column_widget_selection_controlled)
+            current_cols_select_all_selected = SELECT_ALL_COLS_ANALYSIS_OPTION in raw_cols_widget_selection
+            prev_cols_select_all_selected = SELECT_ALL_COLS_ANALYSIS_OPTION in prev_cols_widget_display_state
+            final_cols_for_display = []
+            next_cols_widget_display_state = list(raw_cols_widget_selection)
+
+            if current_cols_select_all_selected and not prev_cols_select_all_selected:
+                final_cols_for_display = list(all_columns)
+                next_cols_widget_display_state = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+            elif not current_cols_select_all_selected and prev_cols_select_all_selected:
+                final_cols_for_display = []
+                next_cols_widget_display_state = []
+            else:
+                current_selected_actual_cols = [c for c in raw_cols_widget_selection if c != SELECT_ALL_COLS_ANALYSIS_OPTION]
+                if current_cols_select_all_selected:
+                    if len(current_selected_actual_cols) < len(all_columns):
+                        next_cols_widget_display_state = list(current_selected_actual_cols)
+                        final_cols_for_display = list(current_selected_actual_cols)
+                    else:
+                        final_cols_for_display = list(all_columns)
+                else:
+                    final_cols_for_display = list(current_selected_actual_cols)
+                    if set(current_selected_actual_cols) == set(all_columns) and all_columns:
+                        next_cols_widget_display_state = [SELECT_ALL_COLS_ANALYSIS_OPTION] + list(all_columns)
+
+            st.session_state.selected_display_cols = final_cols_for_display
+            st.session_state.analysis_tab_column_widget_selection_controlled = next_cols_widget_display_state
+
+            columns_to_show = st.session_state.get('selected_display_cols', all_columns)
+            if not columns_to_show and all_columns:
+                 columns_to_show = all_columns
+
+            if columns_to_show: # Ensure there are columns to show
+                st.dataframe(df_display[columns_to_show], hide_index=True)
+            else: # This case should ideally be covered by the logic above, but as a fallback
+                st.info("Please select at least one column to display, or all columns will be shown if the selection is empty and columns are available.")
+
+        elif df_display.empty: # This elif should be at the same level as the first if not df_display.empty
+            st.info("No data to display based on current filters.")
+        # If df_display is not empty but columns_to_show ended up empty (e.g. if all_columns was also empty initially)
+        # This case is unlikely if df_display was not empty, but good to be robust.
+        else:
+            st.info("No columns available to display.")
+
         # Note viewer
         st.subheader("📝 Note Details")
         
@@ -1025,10 +1207,418 @@ else:
             else:
                 st.info("No cases found with notes created today.")
 
+    elif selected == "Incident Overview":
+        st.title("📋 Incident Overview")
+
+        SELECT_ALL_BASE_STRING = "[Select All %s]"
+
+        if 'incident_overview_df' not in st.session_state or st.session_state.incident_overview_df is None or st.session_state.incident_overview_df.empty:
+            st.warning(
+                "The 'Incident Report Excel' has not been uploaded or is missing the required columns "
+                "('Customer', 'Incident', 'Team', 'Priority', 'Status'). " # Updated message
+                "Please upload the correct file via the sidebar to view the Incident Overview."
+            )
+        else:
+            overview_df = st.session_state.incident_overview_df.copy() # Work with a copy
+
+            st.subheader("Filter Incidents")
+            # Create 4 columns for filters to include Status
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                # Ensure 'Creator' column exists before trying to access it
+                if 'Creator' in overview_df.columns:
+                    unique_creators = sorted(overview_df['Creator'].dropna().unique())
+                else:
+                    unique_creators = [] # Default to empty list if column is missing
+
+                SELECT_ALL_CREATORS_OPTION = SELECT_ALL_BASE_STRING % "Creators"
+
+                if 'incident_creator_widget_selection_controlled' not in st.session_state:
+                    if unique_creators:
+                        st.session_state.incident_creator_widget_selection_controlled = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
+                        st.session_state.selected_creators = list(unique_creators)
+                    else:
+                        st.session_state.incident_creator_widget_selection_controlled = []
+                        st.session_state.selected_creators = []
+
+                options_for_creator_widget = [SELECT_ALL_CREATORS_OPTION] + unique_creators
+                raw_creator_widget_selection = st.multiselect(
+                    "Filter by Creator",
+                    options=options_for_creator_widget,
+                    default=st.session_state.incident_creator_widget_selection_controlled,
+                    key="multi_select_incident_creator"
+                )
+
+                prev_creator_widget_display_state = list(st.session_state.incident_creator_widget_selection_controlled)
+                current_creator_select_all_selected = SELECT_ALL_CREATORS_OPTION in raw_creator_widget_selection
+                prev_creator_select_all_selected = SELECT_ALL_CREATORS_OPTION in prev_creator_widget_display_state
+                final_creators_for_filtering = []
+                next_creator_widget_display_state = list(raw_creator_widget_selection)
+
+                if current_creator_select_all_selected and not prev_creator_select_all_selected:
+                    final_creators_for_filtering = list(unique_creators)
+                    next_creator_widget_display_state = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
+                elif not current_creator_select_all_selected and prev_creator_select_all_selected:
+                    final_creators_for_filtering = []
+                    next_creator_widget_display_state = []
+                else:
+                    current_selected_actual_creators = [c for c in raw_creator_widget_selection if c != SELECT_ALL_CREATORS_OPTION]
+                    if current_creator_select_all_selected:
+                        if len(current_selected_actual_creators) < len(unique_creators):
+                            next_creator_widget_display_state = list(current_selected_actual_creators)
+                            final_creators_for_filtering = list(current_selected_actual_creators)
+                        else:
+                            final_creators_for_filtering = list(unique_creators)
+                    else:
+                        final_creators_for_filtering = list(current_selected_actual_creators)
+                        if set(current_selected_actual_creators) == set(unique_creators) and unique_creators:
+                            next_creator_widget_display_state = [SELECT_ALL_CREATORS_OPTION] + list(unique_creators)
+                st.session_state.selected_creators = final_creators_for_filtering
+                st.session_state.incident_creator_widget_selection_controlled = next_creator_widget_display_state
+
+            with col2:
+                if 'Team' in overview_df.columns:
+                    unique_teams = sorted(overview_df['Team'].dropna().unique())
+                else:
+                    unique_teams = []
+
+                SELECT_ALL_TEAMS_OPTION = SELECT_ALL_BASE_STRING % "Teams"
+
+                if 'incident_team_widget_selection_controlled' not in st.session_state:
+                    if unique_teams:
+                        st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
+                        st.session_state.selected_teams = list(unique_teams)
+                    else:
+                        st.session_state.incident_team_widget_selection_controlled = []
+                        st.session_state.selected_teams = []
+
+                options_for_team_widget = [SELECT_ALL_TEAMS_OPTION] + unique_teams
+                raw_team_widget_selection = st.multiselect(
+                    "Filter by Team",
+                    options=options_for_team_widget,
+                    default=st.session_state.incident_team_widget_selection_controlled,
+                    key="multi_select_incident_team"
+                )
+
+                prev_team_widget_display_state = list(st.session_state.incident_team_widget_selection_controlled)
+                current_team_select_all_selected = SELECT_ALL_TEAMS_OPTION in raw_team_widget_selection
+                prev_team_select_all_selected = SELECT_ALL_TEAMS_OPTION in prev_team_widget_display_state
+                final_teams_for_filtering = []
+                next_team_widget_display_state = list(raw_team_widget_selection)
+
+                if current_team_select_all_selected and not prev_team_select_all_selected:
+                    final_teams_for_filtering = list(unique_teams)
+                    next_team_widget_display_state = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
+                elif not current_team_select_all_selected and prev_team_select_all_selected:
+                    final_teams_for_filtering = []
+                    next_team_widget_display_state = []
+                else:
+                    current_selected_actual_teams = [t for t in raw_team_widget_selection if t != SELECT_ALL_TEAMS_OPTION]
+                    if current_team_select_all_selected:
+                        if len(current_selected_actual_teams) < len(unique_teams):
+                            next_team_widget_display_state = list(current_selected_actual_teams)
+                            final_teams_for_filtering = list(current_selected_actual_teams)
+                        else:
+                            final_teams_for_filtering = list(unique_teams)
+                    else:
+                        final_teams_for_filtering = list(current_selected_actual_teams)
+                        if set(current_selected_actual_teams) == set(unique_teams) and unique_teams:
+                            next_team_widget_display_state = [SELECT_ALL_TEAMS_OPTION] + list(unique_teams)
+                st.session_state.selected_teams = final_teams_for_filtering
+                st.session_state.incident_team_widget_selection_controlled = next_team_widget_display_state
+
+            with col3:
+                if 'Priority' in overview_df.columns:
+                    unique_priorities = sorted(overview_df['Priority'].dropna().unique())
+                else:
+                    unique_priorities = []
+
+                SELECT_ALL_PRIORITIES_OPTION = SELECT_ALL_BASE_STRING % "Priorities"
+
+                if 'incident_priority_widget_selection_controlled' not in st.session_state:
+                    if unique_priorities:
+                        st.session_state.incident_priority_widget_selection_controlled = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
+                        st.session_state.selected_priorities = list(unique_priorities)
+                    else:
+                        st.session_state.incident_priority_widget_selection_controlled = []
+                        st.session_state.selected_priorities = []
+
+                options_for_priority_widget = [SELECT_ALL_PRIORITIES_OPTION] + unique_priorities
+                raw_priority_widget_selection = st.multiselect(
+                    "Filter by Priority",
+                    options=options_for_priority_widget,
+                    default=st.session_state.incident_priority_widget_selection_controlled,
+                    key="multi_select_incident_priority"
+                )
+
+                prev_priority_widget_display_state = list(st.session_state.incident_priority_widget_selection_controlled)
+                current_priority_select_all_selected = SELECT_ALL_PRIORITIES_OPTION in raw_priority_widget_selection
+                prev_priority_select_all_selected = SELECT_ALL_PRIORITIES_OPTION in prev_priority_widget_display_state
+                final_priorities_for_filtering = []
+                next_priority_widget_display_state = list(raw_priority_widget_selection)
+
+                if current_priority_select_all_selected and not prev_priority_select_all_selected:
+                    final_priorities_for_filtering = list(unique_priorities)
+                    next_priority_widget_display_state = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
+                elif not current_priority_select_all_selected and prev_priority_select_all_selected:
+                    final_priorities_for_filtering = []
+                    next_priority_widget_display_state = []
+                else:
+                    current_selected_actual_priorities = [p for p in raw_priority_widget_selection if p != SELECT_ALL_PRIORITIES_OPTION]
+                    if current_priority_select_all_selected:
+                        if len(current_selected_actual_priorities) < len(unique_priorities):
+                            next_priority_widget_display_state = list(current_selected_actual_priorities)
+                            final_priorities_for_filtering = list(current_selected_actual_priorities)
+                        else:
+                            final_priorities_for_filtering = list(unique_priorities)
+                    else:
+                        final_priorities_for_filtering = list(current_selected_actual_priorities)
+                        if set(current_selected_actual_priorities) == set(unique_priorities) and unique_priorities:
+                            next_priority_widget_display_state = [SELECT_ALL_PRIORITIES_OPTION] + list(unique_priorities)
+                st.session_state.selected_priorities = final_priorities_for_filtering
+                st.session_state.incident_priority_widget_selection_controlled = next_priority_widget_display_state
+
+            with col4: # New column for Status filter
+                if 'Status' in overview_df.columns:
+                    unique_statuses = sorted(overview_df['Status'].dropna().unique())
+                    # Exclude 'Closed', 'Resolved', 'Cancelled' by default
+                    closed_like_statuses = {'Closed', 'Resolved', 'Cancelled'}
+                    default_selected_statuses = [s for s in unique_statuses if s not in closed_like_statuses]
+                else:
+                    unique_statuses = []
+                    default_selected_statuses = []
+
+                SELECT_ALL_STATUSES_OPTION = SELECT_ALL_BASE_STRING % "Statuses"
+
+                if 'incident_status_widget_selection_controlled' not in st.session_state:
+                    temp_initial_statuses = list(default_selected_statuses) # Use app's original default
+                    if unique_statuses and set(temp_initial_statuses) == set(unique_statuses):
+                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
+                        st.session_state.selected_statuses = list(unique_statuses)
+                    elif not temp_initial_statuses and unique_statuses:
+                        st.session_state.incident_status_widget_selection_controlled = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
+                        st.session_state.selected_statuses = list(unique_statuses)
+                    else:
+                        st.session_state.incident_status_widget_selection_controlled = list(temp_initial_statuses)
+                        st.session_state.selected_statuses = list(temp_initial_statuses)
+
+                options_for_status_widget = [SELECT_ALL_STATUSES_OPTION] + unique_statuses
+                raw_status_widget_selection = st.multiselect(
+                    "Filter by Status",
+                    options=options_for_status_widget,
+                    default=st.session_state.incident_status_widget_selection_controlled,
+                    key="multi_select_incident_status"
+                )
+
+                prev_status_widget_display_state = list(st.session_state.incident_status_widget_selection_controlled)
+                current_status_select_all_selected = SELECT_ALL_STATUSES_OPTION in raw_status_widget_selection
+                prev_status_select_all_selected = SELECT_ALL_STATUSES_OPTION in prev_status_widget_display_state
+                final_statuses_for_filtering = []
+                next_status_widget_display_state = list(raw_status_widget_selection)
+
+                if current_status_select_all_selected and not prev_status_select_all_selected:
+                    final_statuses_for_filtering = list(unique_statuses)
+                    next_status_widget_display_state = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
+                elif not current_status_select_all_selected and prev_status_select_all_selected:
+                    final_statuses_for_filtering = []
+                    next_status_widget_display_state = []
+                else:
+                    current_selected_actual_statuses = [s for s in raw_status_widget_selection if s != SELECT_ALL_STATUSES_OPTION]
+                    if current_status_select_all_selected:
+                        if len(current_selected_actual_statuses) < len(unique_statuses):
+                            next_status_widget_display_state = list(current_selected_actual_statuses)
+                            final_statuses_for_filtering = list(current_selected_actual_statuses)
+                        else:
+                            final_statuses_for_filtering = list(unique_statuses)
+                    else:
+                        final_statuses_for_filtering = list(current_selected_actual_statuses)
+                        if set(current_selected_actual_statuses) == set(unique_statuses) and unique_statuses:
+                            next_status_widget_display_state = [SELECT_ALL_STATUSES_OPTION] + list(unique_statuses)
+                st.session_state.selected_statuses = final_statuses_for_filtering
+                st.session_state.incident_status_widget_selection_controlled = next_status_widget_display_state
+
+            # Apply filters
+            filtered_overview_df = overview_df
+
+            if st.session_state.get('selected_creators') and 'Creator' in filtered_overview_df.columns:
+                filtered_overview_df = filtered_overview_df[filtered_overview_df['Creator'].isin(st.session_state.selected_creators)]
+            if st.session_state.get('selected_teams') and 'Team' in filtered_overview_df.columns:
+                filtered_overview_df = filtered_overview_df[filtered_overview_df['Team'].isin(st.session_state.selected_teams)]
+            if st.session_state.get('selected_priorities') and 'Priority' in filtered_overview_df.columns:
+                filtered_overview_df = filtered_overview_df[filtered_overview_df['Priority'].isin(st.session_state.selected_priorities)]
+            if st.session_state.get('selected_statuses') and 'Status' in filtered_overview_df.columns: # Add status filter
+                filtered_overview_df = filtered_overview_df[filtered_overview_df['Status'].isin(st.session_state.selected_statuses)]
+                    # --- Pie Chart for Closed Incidents ---
+            st.markdown("---") # Visual separator before the pie chart
+            if 'Status' in overview_df.columns: # Ensure 'Status' column exists in the original overview_df
+                closed_count = overview_df[overview_df['Status'] == 'Closed'].shape[0]
+                total_incidents = overview_df.shape[0]
+                other_count = total_incidents - closed_count
+
+                if total_incidents > 0: # Avoid division by zero if no incidents
+                    chart_data = pd.DataFrame({
+                        'Status Category': ['Closed', 'Open/Other'],
+                        'Count': [closed_count, other_count]
+                    })
+                    fig_status_pie = px.pie(chart_data, names='Status Category', values='Count', title='Percentage of Closed Incidents')
+                    st.plotly_chart(fig_status_pie, use_container_width=True)
+                else:
+                    st.info("No incident data available to display the status pie chart.")
+            else:
+                st.warning("Cannot display Percentage of Closed Incidents: 'Status' column missing from source data.")
+
+        # --- New Filtered Incident Details Table ---
+        st.markdown("---") # Separator before the new table
+        st.subheader("Filtered Incident Details")
+
+        if not filtered_overview_df.empty:
+            # Define default columns for the table
+            default_table_columns = ["Incident", "Creator", "Team", "Priority", "Status"]
+
+            # Filter default columns to only include those present in the DataFrame
+            available_default_columns = [col for col in default_table_columns if col in filtered_overview_df.columns]
+
+            # Add column selector multiselect
+            if not filtered_overview_df.empty:
+                all_available_columns = filtered_overview_df.columns.tolist()
+                SELECT_ALL_COLS_INCIDENT_OPTION = "[Select All Columns]"
+
+                # available_default_columns is defined above this block in the original code
+                if 'incident_tab_column_widget_selection_controlled' not in st.session_state:
+                    temp_initial_cols_incident = list(available_default_columns)
+                    if all_available_columns and set(temp_initial_cols_incident) == set(all_available_columns):
+                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
+                        st.session_state.selected_table_columns = list(all_available_columns)
+                    elif not temp_initial_cols_incident and all_available_columns:
+                        st.session_state.incident_tab_column_widget_selection_controlled = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
+                        st.session_state.selected_table_columns = list(all_available_columns)
+                    else:
+                        st.session_state.incident_tab_column_widget_selection_controlled = list(temp_initial_cols_incident)
+                        st.session_state.selected_table_columns = list(temp_initial_cols_incident)
+
+                options_for_incident_cols_widget = [SELECT_ALL_COLS_INCIDENT_OPTION] + all_available_columns
+                raw_incident_cols_widget_selection = st.multiselect(
+                    "Select columns for table:",
+                    options=options_for_incident_cols_widget,
+                    default=st.session_state.incident_tab_column_widget_selection_controlled,
+                    key="multi_select_incident_overview_columns"
+                )
+
+                prev_incident_cols_widget_display_state = list(st.session_state.incident_tab_column_widget_selection_controlled)
+                current_incident_cols_select_all_selected = SELECT_ALL_COLS_INCIDENT_OPTION in raw_incident_cols_widget_selection
+                prev_incident_cols_select_all_selected = SELECT_ALL_COLS_INCIDENT_OPTION in prev_incident_cols_widget_display_state
+                final_incident_cols_for_display = []
+                next_incident_cols_widget_display_state = list(raw_incident_cols_widget_selection)
+
+                if current_incident_cols_select_all_selected and not prev_incident_cols_select_all_selected:
+                    final_incident_cols_for_display = list(all_available_columns)
+                    next_incident_cols_widget_display_state = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
+                elif not current_incident_cols_select_all_selected and prev_incident_cols_select_all_selected:
+                    final_incident_cols_for_display = []
+                    next_incident_cols_widget_display_state = []
+                else:
+                    current_selected_actual_incident_cols = [c for c in raw_incident_cols_widget_selection if c != SELECT_ALL_COLS_INCIDENT_OPTION]
+                    if current_incident_cols_select_all_selected:
+                        if len(current_selected_actual_incident_cols) < len(all_available_columns):
+                            next_incident_cols_widget_display_state = list(current_selected_actual_incident_cols)
+                            final_incident_cols_for_display = list(current_selected_actual_incident_cols)
+                        else:
+                            final_incident_cols_for_display = list(all_available_columns)
+                    else:
+                        final_incident_cols_for_display = list(current_selected_actual_incident_cols)
+                        if set(current_selected_actual_incident_cols) == set(all_available_columns) and all_available_columns:
+                            next_incident_cols_widget_display_state = [SELECT_ALL_COLS_INCIDENT_OPTION] + list(all_available_columns)
+
+                st.session_state.selected_table_columns = final_incident_cols_for_display
+                st.session_state.incident_tab_column_widget_selection_controlled = next_incident_cols_widget_display_state
+
+                current_cols_to_display_incident_tab = st.session_state.get('selected_table_columns', [])
+
+                if not current_cols_to_display_incident_tab: # Check based on the processed selection
+                    st.info("Please select at least one column to display the table.")
+                else:
+                    # Check if essential columns (even if not selected) are missing from the original data source for context
+                    essential_source_cols = ["Incident", "Status"] # Example essentials for the table's purpose
+                    missing_essential_source_cols = [col for col in essential_source_cols if col not in filtered_overview_df.columns] # Check against filtered_overview_df
+                    if missing_essential_source_cols:
+                        st.caption(f"Warning: Source data is missing essential columns for full detail: {', '.join(missing_essential_source_cols)}.")
+
+                    st.write(f"Displaying {len(filtered_overview_df)} records in table with selected columns.") # This len is of the df, not cols
+                    st.dataframe(
+                        filtered_overview_df[current_cols_to_display_incident_tab],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            else: # This else corresponds to 'if not filtered_overview_df.empty:' for the multiselect definition
+                # If filtered_overview_df is empty, no column selector or table is shown.
+                # This part of the original code is outside the SEARCH block, so it's retained.
+                # The st.info message about "No data to display in the 'Filtered Incident Details' table"
+                # will be shown from the outer 'else' block.
+                pass # Explicitly pass if no specific action for empty df here regarding column selector
+
+        else:
+            st.info("No data to display in the 'Filtered Incident Details' table based on current filters.")
+        
+        # --- Team Assignment Distribution ---
+        st.markdown("---") # Visual separator
+        st.subheader("Team Assignment Distribution")
+        if not filtered_overview_df.empty:
+            if 'Team' in filtered_overview_df.columns:
+                team_distribution_data = filtered_overview_df['Team'].value_counts()
+                
+                if not team_distribution_data.empty:
+                    fig_team_dist = px.pie(
+                        team_distribution_data,
+                        names=team_distribution_data.index,
+                        values=team_distribution_data.values,
+                        title="Distribution of Incidents by Team"
+                    )
+                    fig_team_dist.update_traces(textposition='inside', textinfo='percent+label')
+                    st.plotly_chart(fig_team_dist, use_container_width=True)
+                else:
+                    st.info("No team assignment data to display based on current filters.")
+            else:
+                st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
+        else:
+            st.info("No data available to display for Team Assignment Distribution based on current filters.")
+            
+        # --- High-Priority Incidents Table (remains, now affected by Status filter too) ---
+        st.markdown("---")
+        st.subheader("High-Priority Incidents (P1 & P2)")
+        if not filtered_overview_df.empty:
+            # Include "Status" in this table as well, if available
+            high_priority_table_cols = ["Incident", "Creator", "Team", "Priority"]
+            if 'Status' in filtered_overview_df.columns:
+                high_priority_table_cols.append("Status")
+
+            # Check if all *intended* columns for this table are present
+            missing_cols_for_high_priority_table = [col for col in ["Incident", "Creator", "Team", "Priority"] if col not in filtered_overview_df.columns]
+
+            if not missing_cols_for_high_priority_table:
+                high_priority_values = ["1", "2"]
+                
+                high_priority_incidents_df = filtered_overview_df[
+                    filtered_overview_df['Priority'].astype(str).isin(high_priority_values)
+                ]
+                
+                if not high_priority_incidents_df.empty:
+                    st.dataframe(
+                        high_priority_incidents_df[[col for col in high_priority_table_cols if col in high_priority_incidents_df.columns]], # Display only available columns
+                        use_container_width=True,
+                        hide_index=True 
+                    )
+                else:
+                    st.info("No high-priority incidents (P1 or P2) found based on current filters.")
+            else:
+                st.warning(f"Cannot display High-Priority Incidents table: Missing essential columns: {', '.join(missing_cols_for_high_priority_table)}.")
+        else:
+            st.info("No data available to display for High-Priority Incidents based on current filters.")
+
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen Analyzer v2.5 | Developed by Ali Babiker | © 2025
+    Intellipen Analyzer V3.0 | Developed by Ali Babiker | © 2025
     </div>""",
     unsafe_allow_html=True
 )
