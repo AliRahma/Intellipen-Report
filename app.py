@@ -616,6 +616,12 @@ else:
             df_enriched['Last Update'] = pd.to_datetime(df_enriched['Last Update'], errors='coerce')
         if 'Breach Date' in df_enriched.columns:
             df_enriched['Breach Date'] = pd.to_datetime(df_enriched['Breach Date'], errors='coerce')
+
+        # Calculate Case Count
+        if 'Ticket Number' in df_enriched.columns and 'Type' in df_enriched.columns:
+            df_enriched['Case Count'] = df_enriched.groupby(['Ticket Number', 'Type'])['Ticket Number'].transform('size')
+        else:
+            df_enriched['Case Count'] = pd.NA # Or some other appropriate default
             
         return df_enriched
     
@@ -883,6 +889,24 @@ else:
         # This case is unlikely if df_display was not empty, but good to be robust.
         else:
             st.info("No columns available to display.")
+
+        # Incidents/SRs Linked Cases Summary
+        st.subheader("🔗 Incidents/SRs Linked Cases Summary")
+        min_linked_cases = st.number_input("Minimum Linked Cases", min_value=1, value=2, step=1)
+
+        if 'Case Count' in df_display.columns and 'Ticket Number' in df_display.columns:
+            linked_cases_df = df_display[
+                (df_display['Case Count'] >= min_linked_cases) &
+                (df_display['Ticket Number'].notna())
+            ]
+
+            if not linked_cases_df.empty:
+                linked_summary_df = linked_cases_df[['Ticket Number', 'Type', 'Case Count']].drop_duplicates().sort_values(by='Case Count', ascending=False)
+                st.dataframe(linked_summary_df, hide_index=True)
+            else:
+                st.info(f"No Incidents/SRs found with at least {min_linked_cases} linked cases based on current filters.")
+        else:
+            st.warning("Required columns ('Case Count', 'Ticket Number') not available for linked cases summary.")
 
         # Note viewer
         st.subheader("📝 Note Details")
@@ -1649,7 +1673,7 @@ else:
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen Analyzer V3.0 | Developed by Ali Babiker | © June 2025
+    Intellipen Analyzer V3.1 | Developed by Ali Babiker | © June 2025
     </div>""",
     unsafe_allow_html=True
 )
