@@ -901,7 +901,7 @@ else:
             ]
 
             if not linked_cases_df.empty:
-                linked_summary_df = linked_cases_df[['Ticket Number', 'Type', 'Case Count']].drop_duplicates().sort_values(by='Case Count', ascending=False)
+                linked_summary_df = linked_cases_df[['Ticket Number', 'Type','Status', 'Case Count']].drop_duplicates().sort_values(by='Case Count', ascending=False)
                 st.dataframe(linked_summary_df, hide_index=True)
             else:
                 st.info(f"No Incidents/SRs found with at least {min_linked_cases} linked cases based on current filters.")
