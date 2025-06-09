@@ -242,7 +242,7 @@ def generate_excel_download(data):
 # Sidebar - File Upload Section
 with st.sidebar:
     #Display the logo
-    st.image("Smart Q Logo.jpg", use_column_width='auto')
+    st.image("Smart Q Logo.jpg", use_container_width='auto')
     st.title("📊 Intellipen Analyzer Pro")
     st.markdown("---")
 
