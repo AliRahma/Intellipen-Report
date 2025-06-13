@@ -13,7 +13,7 @@ from utils import calculate_team_status_summary
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen Analyzer",
+    page_title="Intellipen SmartQ",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -130,6 +130,8 @@ if 'selected_case_ids' not in st.session_state:
     st.session_state.selected_case_ids = []
 if 'incident_overview_df' not in st.session_state:
     st.session_state.incident_overview_df = None
+if 'report_datetime' not in st.session_state:
+    st.session_state.report_datetime = None
 
 # Function to load and process data
 @st.cache_data
@@ -139,7 +141,39 @@ def load_data(file):
     
     try:
         file_name = file.name
+        # --- TEMPORARY LOGGING START ---
+        print(f"--- DEBUG: load_data: file_name is '{file_name}' ---") 
+        # --- TEMPORARY LOGGING END ---
         file_extension = os.path.splitext(file_name)[1].lower()
+
+        st.session_state.report_datetime = None # Initialize/reset
+        match = re.search(r'_(\d{8})_(\d{6})\.', file_name)
+        # --- TEMPORARY LOGGING START ---
+        print(f"--- DEBUG: load_data: regex match object is {match} ---")
+        if match:
+            print(f"--- DEBUG: load_data: match.group(1) is '{match.group(1)}', match.group(2) is '{match.group(2)}' ---")
+        # --- TEMPORARY LOGGING END ---
+        
+        if match:
+            date_str = match.group(1)
+            time_str = match.group(2)
+            try:
+                dt_object = datetime.strptime(date_str + time_str, '%Y%m%d%H%M%S')
+                st.session_state.report_datetime = dt_object.strftime('%Y-%m-%d %H:%M:%S')
+                # --- TEMPORARY LOGGING START ---
+                print(f"--- DEBUG: load_data: successfully parsed datetime: {st.session_state.report_datetime} ---")
+                # --- TEMPORARY LOGGING END ---
+            except ValueError as e:
+                st.session_state.report_datetime = None # Handle parsing error
+                # --- TEMPORARY LOGGING START ---
+                print(f"--- DEBUG: load_data: ValueError during parsing: {e} ---")
+                # --- TEMPORARY LOGGING END ---
+                # Optionally, log this error: st.warning(f"Could not parse date/time from filename: {file_name}")
+        else:
+            # --- TEMPORARY LOGGING START ---
+            print(f"--- DEBUG: load_data: No regex match for filename '{file_name}' ---")
+            # --- TEMPORARY LOGGING END ---
+                # Optionally, log this error: st.warning(f"Could not parse date/time from filename: {file_name}")
         
         if file_extension == '.xls':
             try:
@@ -241,13 +275,13 @@ def generate_excel_download(data):
 
 # Sidebar - File Upload Section
 with st.sidebar:
-    #Display the logo
-    #st.image("Smart Q Logo.jpg", use_container_width='auto')
-    st.title("📊 Intellipen Analyzer Pro")
+    # Display the logo
+    st.image("Smart Q Logo.jpg", width=150)
+    st.title("📊 Intellipen SmartQ")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
-    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx","xls"])
+    uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx"])
     sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
     incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx","xls"])
     
@@ -256,7 +290,8 @@ with st.sidebar:
             df = load_data(uploaded_file)
             if df is not None:
                 st.session_state.main_df = process_main_df(df)
-                st.session_state.last_upload_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                abu_dhabi_tz = pytz.timezone('Asia/Dubai')
+                st.session_state.last_upload_time = datetime.now(abu_dhabi_tz).strftime("%Y-%m-%d %H:%M:%S")
                 st.success(f"Main data loaded: {df.shape[0]} records") # Ensure this is also within the check
                 st.session_state.data_loaded = True
     
@@ -294,10 +329,15 @@ with st.sidebar:
                 st.session_state.incident_overview_df = None # Ensure it's None if file loading failed
     
     # Display last upload time
-    abu_dhabi_tz = pytz.timezone('Asia/Dubai')
-    st.session_state.last_upload_time = datetime.now(abu_dhabi_tz).strftime("%Y-%m-%d %H:%M:%S")
-    if st.session_state.last_upload_time:
-        st.info(f"Last upload: {st.session_state.last_upload_time}")
+    # abu_dhabi_tz = pytz.timezone('Asia/Dubai') # This line is removed as last_upload_time is set upon actual upload
+    if 'last_upload_time' not in st.session_state or st.session_state.last_upload_time is None:
+        # If no actual upload has happened in this session, prevent setting a misleading "current time" as upload time.
+        pass
+
+    if st.session_state.get('last_upload_time'): # Use .get for safer access
+        st.info(f"Last data import: {st.session_state.last_upload_time}") # Changed label for clarity
+    else:
+        st.info("No data imported yet in this session.")
     
     st.markdown("---")
     
@@ -409,9 +449,9 @@ with st.sidebar:
 
 # Main content
 if not st.session_state.data_loaded:
-    st.title("📊 Intellipen Analyzer Pro Enhanced")
+    st.title("📊 Intellipen SmartQ")
     st.markdown("""
-    ### Welcome to the Enhanced Intellipen Analyzer Pro!
+    ### Welcome to the Intellipen SmartQ!
     
     This application helps you analyze Service Requests and Incidents efficiently.
     
@@ -639,8 +679,20 @@ else:
     if selected == "Analysis":
         st.title("🔍 Analysis")
         
-        # Display last update time
-        st.markdown(f"**Last data update:** {st.session_state.last_upload_time}")
+        # Adjusted "Last data update" display
+        if st.session_state.get('last_upload_time'):
+            # Use a clearer label now that last_upload_time is corrected
+            update_time_display = st.session_state.last_upload_time
+            st.markdown(f"**Last Data Import Time:** {update_time_display}")
+        else:
+            st.markdown("**Last Data Import Time:** No data imported yet")
+
+        # New "Report Datetime" label
+        if st.session_state.get('report_datetime'):
+            report_datetime_display = st.session_state.report_datetime
+            st.markdown(f"**Report Datetime (from filename):** {report_datetime_display}")
+        else:
+            st.markdown("**Report Datetime (from filename):** Not available")
         
         # Filtering options
         col1, col2,col3 = st.columns(3)
@@ -1675,7 +1727,7 @@ else:
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen Analyzer V3.1 | Developed by Ali Babiker | © June 2025
+    Intellipen SmartQ V3.5 | Developed by Ali Babiker | © June 2025
     </div>""",
     unsafe_allow_html=True
 )
