@@ -133,12 +133,14 @@ if 'incident_overview_df' not in st.session_state:
 if 'report_datetime' not in st.session_state:
     st.session_state.report_datetime = None
 
-# Function to load and process data
 @st.cache_data
 def load_data(file):
     if file is None:
-        return None
+        return None, None  # Return None for both DataFrame and datetime string
     
+    parsed_datetime_str = None
+    df = None
+
     try:
         file_name = file.name
         # --- TEMPORARY LOGGING START ---
@@ -146,7 +148,7 @@ def load_data(file):
         # --- TEMPORARY LOGGING END ---
         file_extension = os.path.splitext(file_name)[1].lower()
 
-        st.session_state.report_datetime = None # Initialize/reset
+        # Attempt to parse datetime from filename
         match = re.search(r'_(\d{8})_(\d{6})\.', file_name)
         # --- TEMPORARY LOGGING START ---
         print(f"--- DEBUG: load_data: regex match object is {match} ---")
@@ -159,12 +161,12 @@ def load_data(file):
             time_str = match.group(2)
             try:
                 dt_object = datetime.strptime(date_str + time_str, '%Y%m%d%H%M%S')
-                st.session_state.report_datetime = dt_object.strftime('%Y-%m-%d %H:%M:%S')
+                parsed_datetime_str = dt_object.strftime('%Y-%m-%d %H:%M:%S')
                 # --- TEMPORARY LOGGING START ---
-                print(f"--- DEBUG: load_data: successfully parsed datetime: {st.session_state.report_datetime} ---")
+                print(f"--- DEBUG: load_data: successfully parsed datetime: {parsed_datetime_str} ---")
                 # --- TEMPORARY LOGGING END ---
             except ValueError as e:
-                st.session_state.report_datetime = None # Handle parsing error
+                # parsed_datetime_str remains None if parsing fails
                 # --- TEMPORARY LOGGING START ---
                 print(f"--- DEBUG: load_data: ValueError during parsing: {e} ---")
                 # --- TEMPORARY LOGGING END ---
@@ -173,30 +175,29 @@ def load_data(file):
             # --- TEMPORARY LOGGING START ---
             print(f"--- DEBUG: load_data: No regex match for filename '{file_name}' ---")
             # --- TEMPORARY LOGGING END ---
-                # Optionally, log this error: st.warning(f"Could not parse date/time from filename: {file_name}")
+            # Optionally, log this error: st.warning(f"Could not parse date/time from filename: {file_name}")
         
+        # Read the Excel file
         if file_extension == '.xls':
             try:
-                # First attempt with xlrd
-                return pd.read_excel(file, engine='xlrd')
-            except Exception: # Catch errors from xlrd
+                df = pd.read_excel(file, engine='xlrd')
+            except Exception:
                 try:
-                    file.seek(0) # Reset file pointer
-                    # Second attempt with openpyxl
-                    return pd.read_excel(file, engine='openpyxl')
+                    file.seek(0)
+                    df = pd.read_excel(file, engine='openpyxl')
                 except Exception as e_openpyxl:
-                    # If openpyxl also fails, raise the error to be caught by the main handler
                     raise e_openpyxl
-            return pd.read_excel(file, engine='xlrd')
-
         elif file_extension == '.xlsx':
-            return pd.read_excel(file, engine='openpyxl')
+            df = pd.read_excel(file, engine='openpyxl')
         else:
-            raise ValueError("Unsupported file type. Please upload .xls or .xlsx files.")
+            st.error(f"Unsupported file type: {file_extension}. Please upload .xls or .xlsx files.") # Changed from raise to st.error
+            return None, parsed_datetime_str # Return None for df if unsupported, but retain parsed_datetime_str if filename was parsable
+
+        return df, parsed_datetime_str
             
     except Exception as e:
-        st.error(f"Error loading file: {e}")
-        return None
+        st.error(f"Error loading file '{file.name}': {e}")
+        return None, parsed_datetime_str # Return None for df, but parsed_datetime_str might have a value if filename parsing happened before exception
 
 # Function to process main dataframe
 def process_main_df(df):
@@ -285,97 +286,88 @@ with st.sidebar:
     sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
     incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx","xls"])
     
+    # report_datetime is initialized to None at the start of the session.
+    # We process files in order: Main, SR, Incident for setting it IF it's currently None.
+
     if uploaded_file:
         with st.spinner("Loading main data..."):
-            df = load_data(uploaded_file)
+            df, parsed_dt = load_data(uploaded_file)
             if df is not None:
                 st.session_state.main_df = process_main_df(df)
                 abu_dhabi_tz = pytz.timezone('Asia/Dubai')
                 st.session_state.last_upload_time = datetime.now(abu_dhabi_tz).strftime("%Y-%m-%d %H:%M:%S")
-                st.success(f"Main data loaded: {df.shape[0]} records") # Ensure this is also within the check
+                st.success(f"Main data loaded: {df.shape[0]} records")
                 st.session_state.data_loaded = True
-    
+                if parsed_dt:
+                    st.session_state.report_datetime = parsed_dt
+            # If df is None, load_data would have shown an error. parsed_dt might still have a value if filename was parsable but content failed.
+            # However, if df is None, we probably shouldn't use its parsed_dt either, as the file is unusable.
+            # The current load_data returns (None, parsed_dt) even on file read error.
+            # Consider if parsed_dt should only be used if df is not None.
+            # For now, strictly following: if parsed_dt is not None from main file, use it.
+            # This was already handled by: if parsed_dt: st.session_state.report_datetime = parsed_dt. This is fine.
+
     if sr_status_file:
         with st.spinner("Loading SR status data..."):
-            sr_df = load_data(sr_status_file)
-            if sr_df is not None: # Add this check
+            sr_df, parsed_dt_sr = load_data(sr_status_file)
+            if sr_df is not None:
                 st.session_state.sr_df = sr_df
                 st.success(f"SR status data loaded: {sr_df.shape[0]} records")
+                if st.session_state.report_datetime is None and parsed_dt_sr:
+                    st.session_state.report_datetime = parsed_dt_sr
+            # else: df is None, error shown by load_data
     
     if incident_status_file:
         with st.spinner("Loading incident report data..."):
-            incident_df = load_data(incident_status_file)
-            if incident_df is not None: # Add this check
+            incident_df, parsed_dt_incident = load_data(incident_status_file)
+            if incident_df is not None:
                 st.session_state.incident_df = incident_df
                 st.success(f"Incident report data loaded: {incident_df.shape[0]} records")
+                if st.session_state.report_datetime is None and parsed_dt_incident:
+                    st.session_state.report_datetime = parsed_dt_incident
 
-                # Process for Incident Overview tab
-                # Copy all columns from incident_df
+                # Process for Incident Overview tab (existing logic)
                 overview_df = incident_df.copy()
-
-                # Rename "Customer" to "Creator" if "Customer" column exists
                 if "Customer" in overview_df.columns:
                     overview_df.rename(columns={"Customer": "Creator"}, inplace=True)
-
-                # Store the full overview_df in session state
                 st.session_state.incident_overview_df = overview_df
                 st.success(f"Incident Overview data loaded: {len(overview_df)} records, {len(overview_df.columns)} columns.")
-
-                # Note: The old logic for 'required_cols' and 'missing_cols' check at this stage is removed.
-                # Specific column checks will be handled within the "Incident Overview" tab itself
-                # for UI elements that depend on them (e.g., filters, default table views).
-
             else:
-                st.session_state.incident_overview_df = None # Ensure it's None if file loading failed
+                st.session_state.incident_overview_df = None
     
-    # Display last upload time
-    # abu_dhabi_tz = pytz.timezone('Asia/Dubai') # This line is removed as last_upload_time is set upon actual upload
+    # Display last upload time (existing logic)
     if 'last_upload_time' not in st.session_state or st.session_state.last_upload_time is None:
-        # If no actual upload has happened in this session, prevent setting a misleading "current time" as upload time.
         pass
-
-    if st.session_state.get('last_upload_time'): # Use .get for safer access
-        st.info(f"Last data import: {st.session_state.last_upload_time}") # Changed label for clarity
+    if st.session_state.get('last_upload_time'):
+        st.info(f"Last data import: {st.session_state.last_upload_time}")
     else:
         st.info("No data imported yet in this session.")
     
     st.markdown("---")
     
-    # Filters section
+    # Filters section (existing logic, depends on st.session_state.data_loaded)
     if st.session_state.data_loaded:
         st.subheader("🔍 Filters")
-        
-        # Get all users
-        df_main = st.session_state.main_df.copy()
+        df_main = st.session_state.main_df.copy() # Should be safe as data_loaded is True
         all_users = df_main['Current User Id'].dropna().unique().tolist()
-        
-        # Define the "Select All" constant string
         SELECT_ALL_USERS_OPTION = "[Select All Users]"
+        default_users_hardcoded = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa']
+        default_users = [u for u in default_users_hardcoded if u in all_users]
 
-        # Multi-select for users
-        default_users_hardcoded = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa'] # Original hardcoded list
-        default_users = [u for u in default_users_hardcoded if u in all_users]  # Filtered against actual users
-
-        # Initialization of session state for the widget
         if 'sidebar_user_widget_selection_controlled' not in st.session_state:
-            # default_users is a hardcoded list, filtered against all_users
-            # Initially, selected_users for filtering should be these defaults.
             st.session_state.selected_users = list(default_users)
-
-            if not default_users and all_users: # If default_users is empty (e.g. hardcoded ones not in all_users) AND there are users, select all
+            if not default_users and all_users:
                 st.session_state.selected_users = list(all_users)
                 st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
-            elif all_users and set(default_users) == set(all_users): # If default_users happens to be all users
+            elif all_users and set(default_users) == set(all_users):
                 st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
-            elif not all_users: # If there are no users at all
+            elif not all_users:
                  st.session_state.selected_users = []
                  st.session_state.sidebar_user_widget_selection_controlled = []
-            else: # Default users are a subset of all_users
+            else:
                 st.session_state.sidebar_user_widget_selection_controlled = list(default_users)
 
         options_for_user_widget = [SELECT_ALL_USERS_OPTION] + all_users
-
-        # Call st.multiselect
         raw_widget_selection = st.multiselect(
             "Select Users",
             options=options_for_user_widget,
@@ -383,18 +375,11 @@ with st.sidebar:
             key="multi_select_sidebar_users"
         )
 
-        # Logic to process widget output and update session state
         prev_widget_display_state = list(st.session_state.sidebar_user_widget_selection_controlled)
         current_select_all_option_selected = SELECT_ALL_USERS_OPTION in raw_widget_selection
-        # prev_select_all_option_selected = SELECT_ALL_USERS_OPTION in prev_widget_display_state # Not needed with new logic directly
         currently_selected_actual_items = [u for u in raw_widget_selection if u != SELECT_ALL_USERS_OPTION]
-
-        # Determine if user explicitly clicked "Select All" or "Unselect All"
-        # This requires comparing raw_widget_selection with prev_widget_display_state carefully
-
         user_clicked_select_all = current_select_all_option_selected and (SELECT_ALL_USERS_OPTION not in prev_widget_display_state)
         user_clicked_unselect_all = (not current_select_all_option_selected) and (SELECT_ALL_USERS_OPTION in prev_widget_display_state and len(prev_widget_display_state) == 1)
-
 
         if user_clicked_select_all:
             st.session_state.selected_users = list(all_users)
@@ -403,37 +388,27 @@ with st.sidebar:
             st.session_state.selected_users = []
             st.session_state.sidebar_user_widget_selection_controlled = []
         else:
-            # Handle individual selections or deselections
-            if current_select_all_option_selected: # "[Select All]" is in raw_widget_selection
-                # This means user de-selected an item while "[Select All]" was (or became) part of raw_widget_selection
-                # Or, user selected all items manually, then also clicked "[Select All]" (which is redundant)
-                # If an item was deselected, "[Select All]" should be removed from display, and actual items shown.
+            if current_select_all_option_selected:
                 if len(currently_selected_actual_items) < len(all_users):
                     st.session_state.selected_users = list(currently_selected_actual_items)
                     st.session_state.sidebar_user_widget_selection_controlled = list(currently_selected_actual_items)
-                else: # All items are selected, and "[Select All]" is present
+                else:
                     st.session_state.selected_users = list(all_users)
                     st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
-            else: # "[Select All]" is NOT in raw_widget_selection
+            else:
                 st.session_state.selected_users = list(currently_selected_actual_items)
                 if all_users and set(currently_selected_actual_items) == set(all_users):
-                    # All items were individually selected
                     st.session_state.sidebar_user_widget_selection_controlled = [SELECT_ALL_USERS_OPTION]
                 else:
                     st.session_state.sidebar_user_widget_selection_controlled = list(currently_selected_actual_items)
         
-        # Date range filter
         if 'Case Start Date' in df_main.columns:
             min_date = df_main['Case Start Date'].min().date()
             max_date = df_main['Case Start Date'].max().date()
-
             if 'sidebar_date_range_value' not in st.session_state:
                 st.session_state.sidebar_date_range_value = (min_date, max_date)
-
             if st.button("Select Full Range", key="btn_select_full_date_range"):
                 st.session_state.sidebar_date_range_value = (min_date, max_date)
-                # Consider st.experimental_rerun() if needed, but often not required for direct value changes
-
             current_date_range_from_widget = st.date_input(
                 "Date Range",
                 value=st.session_state.sidebar_date_range_value,
@@ -441,10 +416,8 @@ with st.sidebar:
                 max_value=max_date,
                 key="date_input_sidebar"
             )
-
             if current_date_range_from_widget != st.session_state.sidebar_date_range_value:
                 st.session_state.sidebar_date_range_value = current_date_range_from_widget
-
             date_range = st.session_state.sidebar_date_range_value
 
 # Main content
@@ -509,161 +482,181 @@ else:
     
     # Function to further process and enrich data
     def enrich_data(df):
-        # Create a copy to avoid modifying the original
         df_enriched = df.copy()
         
         # Classify and extract ticket info
-        df_enriched[['Triage Status', 'Ticket Number', 'Type']] = pd.DataFrame(
-            df_enriched['Last Note'].apply(lambda x: pd.Series(classify_and_extract(x)))
-        )
-        
+        if 'Last Note' in df_enriched.columns:
+            df_enriched[['Triage Status', 'Ticket Number', 'Type']] = pd.DataFrame(
+                df_enriched['Last Note'].apply(lambda x: pd.Series(classify_and_extract(x)))
+            )
+        else:
+            df_enriched['Triage Status'] = "Error: Last Note missing"
+            df_enriched['Ticket Number'] = None
+            df_enriched['Type'] = None
+
         # Calculate case age
         if 'Case Start Date' in df_enriched.columns:
             df_enriched['Age (Days)'] = df_enriched['Case Start Date'].apply(calculate_age)
-        
+        else:
+            df_enriched['Age (Days)'] = None
+
         # Determine if note was created today
         if 'Last Note Date' in df_enriched.columns:
             df_enriched['Created Today'] = df_enriched['Last Note Date'].apply(is_created_today)
+        else:
+            df_enriched['Created Today'] = False
         
-        # Initialize Status and Last Update columns
+        # Initialize Status, Last Update, and Breach Passed columns
         df_enriched['Status'] = None
         df_enriched['Last Update'] = None
         df_enriched['Breach Passed'] = None
         
-        # Merge with SR status data if available
-        if st.session_state.sr_df is not None:
-            sr_df = st.session_state.sr_df.copy()
-            
-            # Clean and prepare SR data
-            sr_df['Service Request'] = sr_df['Service Request'].astype(str).str.extract(r'(\d{4,})')
-            sr_df['Service Request'] = pd.to_numeric(sr_df['Service Request'], errors='coerce')
-            
-            # Rename columns for clarity
-            sr_df = sr_df.rename(columns={
-                'Status': 'SR_Status',
-                'LastModDateTime': 'SR_Last_Update'
-            })
-            
-            # Merge SR data
+        # Ensure 'Ticket Number' is numeric before any merges
+        if 'Ticket Number' in df_enriched.columns:
             df_enriched['Ticket Number'] = pd.to_numeric(df_enriched['Ticket Number'], errors='coerce')
-            df_enriched = df_enriched.merge(
-                sr_df[['Service Request', 'SR_Status', 'SR_Last_Update', 'Breach Passed']],
-                how='left',
-                left_on='Ticket Number',
-                right_on='Service Request'
-            ).drop(columns=['Service Request'])
+
+        # Merge with SR status data if available
+        if hasattr(st.session_state, 'sr_df') and st.session_state.sr_df is not None:
+            sr_df_copy = st.session_state.sr_df.copy()
             
-            # Update Status and Last Update for SRs
-            sr_mask = df_enriched['Type'] == 'SR'
-            df_enriched.loc[sr_mask, 'Status'] = df_enriched.loc[sr_mask, 'SR_Status']
-            df_enriched.loc[sr_mask, 'Last Update'] = df_enriched.loc[sr_mask, 'SR_Last_Update']
-            
-            # Drop temporary columns
-            df_enriched = df_enriched.drop(columns=['SR_Status', 'SR_Last_Update'], errors='ignore')
-            
+            if 'Service Request' in sr_df_copy.columns:
+                sr_df_copy['Service Request'] = sr_df_copy['Service Request'].astype(str).str.extract(r'(\d{4,})')
+                sr_df_copy['Service Request'] = pd.to_numeric(sr_df_copy['Service Request'], errors='coerce')
+                sr_df_copy.dropna(subset=['Service Request'], inplace=True)
+
+                cols_to_merge_from_sr = ['Service Request']
+                sr_rename_for_merge = {}
+
+                if 'Status' in sr_df_copy.columns:
+                    sr_rename_for_merge['Status'] = 'SR_Status_temp'
+                if 'LastModDateTime' in sr_df_copy.columns:
+                    sr_rename_for_merge['LastModDateTime'] = 'SR_Last_Update_temp'
+                if 'Breach Passed' in sr_df_copy.columns:
+                    sr_rename_for_merge['Breach Passed'] = 'SR_Breach_Value_temp'
+
+                sr_df_copy.rename(columns=sr_rename_for_merge, inplace=True)
+
+                for new_name in sr_rename_for_merge.values():
+                    if new_name not in cols_to_merge_from_sr:
+                        cols_to_merge_from_sr.append(new_name)
+
+                df_enriched = df_enriched.merge(
+                    sr_df_copy[cols_to_merge_from_sr],
+                    how='left',
+                    left_on='Ticket Number',
+                    right_on='Service Request',
+                    suffixes=('', '_sr_merged')
+                )
+
+                if 'Service Request_sr_merged' in df_enriched.columns:
+                    df_enriched.drop(columns=['Service Request_sr_merged'], inplace=True)
+                elif 'Service Request' in df_enriched.columns and 'Ticket Number' in df_enriched.columns and df_enriched.columns.tolist().count('Service Request') > 1:
+                     df_enriched.drop(columns=['Service Request'], errors='ignore', inplace=True)
+
+                sr_mask = df_enriched['Type'] == 'SR'
+
+                if 'SR_Status_temp' in df_enriched.columns:
+                    df_enriched.loc[sr_mask, 'Status'] = df_enriched.loc[sr_mask, 'SR_Status_temp']
+                    df_enriched.drop(columns=['SR_Status_temp'], inplace=True)
+                if 'SR_Last_Update_temp' in df_enriched.columns:
+                    df_enriched.loc[sr_mask, 'Last Update'] = df_enriched.loc[sr_mask, 'SR_Last_Update_temp']
+                    df_enriched.drop(columns=['SR_Last_Update_temp'], inplace=True)
+
+                if 'SR_Breach_Value_temp' in df_enriched.columns:
+                    def map_str_to_bool_sr(value):
+                        if pd.isna(value): return None
+                        val_lower = str(value).lower()
+                        if val_lower in ['yes', 'true', '1', 'passed'] : return True
+                        if val_lower in ['no', 'false', '0', 'failed']: return False
+                        return None # Default for unmapped strings
+
+                    mapped_values = df_enriched.loc[sr_mask, 'SR_Breach_Value_temp'].apply(map_str_to_bool_sr)
+                    df_enriched.loc[sr_mask, 'Breach Passed'] = mapped_values
+                    df_enriched.drop(columns=['SR_Breach_Value_temp'], inplace=True)
+
         # Merge with Incident status data if available
-        if st.session_state.incident_df is not None:
-            incident_df = st.session_state.incident_df.copy()
-            
-            # Check for different possible column names for incident ID
-            # Prioritize "Incident Number"
+        if hasattr(st.session_state, 'incident_df') and st.session_state.incident_df is not None:
+            incident_df_copy = st.session_state.incident_df.copy()
             incident_id_col_options = ['Incident', 'Incident ID', 'IncidentID', 'ID', 'Number']
             incident_id_col = None
             for col_option in incident_id_col_options:
-                if col_option in incident_df.columns:
+                if col_option in incident_df_copy.columns:
                     incident_id_col = col_option
                     break
             
             if incident_id_col:
-                # Clean and prepare Incident data
-                incident_df[incident_id_col] = incident_df[incident_id_col].astype(str).str.extract(r'(\d{4,})')
-                incident_df[incident_id_col] = pd.to_numeric(incident_df[incident_id_col], errors='coerce')
+                incident_df_copy[incident_id_col] = incident_df_copy[incident_id_col].astype(str).str.extract(r'(\d{4,})')
+                incident_df_copy[incident_id_col] = pd.to_numeric(incident_df_copy[incident_id_col], errors='coerce')
+                incident_df_copy.dropna(subset=[incident_id_col], inplace=True)
                 
-                # Define columns to be used from incident_df
-                incident_rename_map = {incident_id_col: 'Incident_Number'}
-                incident_merge_cols = ['Incident_Number']
+                inc_rename_map = {incident_id_col: 'Incident_Number_temp'}
+                inc_merge_cols = ['Incident_Number_temp']
 
-                # Status column
-                if 'Status' in incident_df.columns:
-                    incident_rename_map['Status'] = 'INC_Status'
-                    incident_merge_cols.append('INC_Status')
-                else:
-                    st.warning("Column 'Status' not found in Incident report. Incident status will not be updated.")
+                if 'Status' in incident_df_copy.columns:
+                    inc_rename_map['Status'] = 'INC_Status_temp'
+                    inc_merge_cols.append('INC_Status_temp')
 
-                # Last Update column - prioritize "Last Checked at"
                 last_update_col_incident = None
-                if 'Last Checked at' in incident_df.columns:
-                    last_update_col_incident = 'Last Checked at'
-                elif 'Last Checked atc' in incident_df.columns: # Handling typo
-                    last_update_col_incident = 'Last Checked atc'
-                elif 'Modified On' in incident_df.columns: # Fallback
-                    last_update_col_incident = 'Modified On'
-                elif 'Last Update' in incident_df.columns: # Fallback
-                    last_update_col_incident = 'Last Update'
+                if 'Last Checked at' in incident_df_copy.columns: last_update_col_incident = 'Last Checked at'
+                elif 'Last Checked atc' in incident_df_copy.columns: last_update_col_incident = 'Last Checked atc'
+                elif 'Modified On' in incident_df_copy.columns: last_update_col_incident = 'Modified On'
+                elif 'Last Update' in incident_df_copy.columns: last_update_col_incident = 'Last Update'
 
                 if last_update_col_incident:
-                    incident_rename_map[last_update_col_incident] = 'INC_Last_Update'
-                    incident_merge_cols.append('INC_Last_Update')
-                else:
-                    st.warning("Suitable 'Last Update' column (e.g., 'Last Checked at') not found in Incident report. Incident last update time will not be updated.")
+                    inc_rename_map[last_update_col_incident] = 'INC_Last_Update_temp'
+                    inc_merge_cols.append('INC_Last_Update_temp')
 
-                # Breach Indicator column
-                if 'Breach Passed' in incident_df.columns:
-                    incident_rename_map['Breach Passed'] = 'INC_Breach_Passed'
-                    incident_merge_cols.append('INC_Breach_Passed')
-                else:
-                    st.warning("Column 'Breach Passed' not found in Incident report. Incident breach status will not be updated.")
+                if 'Breach Passed' in incident_df_copy.columns:
+                    inc_rename_map['Breach Passed'] = 'INC_Breach_Passed_temp'
+                    inc_merge_cols.append('INC_Breach_Passed_temp')
 
-                incident_df = incident_df.rename(columns=incident_rename_map)
+                incident_df_copy.rename(columns=inc_rename_map, inplace=True)
                 
-                # Select only necessary columns for merging
-                incident_df_to_merge = incident_df[incident_merge_cols].copy()
-
-                # Filter out NaN Incident_Numbers from incident_df_to_merge before merging
-                if 'Incident_Number' in incident_df_to_merge.columns:
-                    incident_df_to_merge = incident_df_to_merge.dropna(subset=['Incident_Number'])
-
-                # Merge Incident data
                 df_enriched = df_enriched.merge(
-                    incident_df_to_merge,
+                    incident_df_copy[inc_merge_cols],
                     how='left',
                     left_on='Ticket Number',
-                    right_on='Incident_Number'
-                ).drop(columns=['Incident_Number'], errors='ignore')
-                
-                # Update Status and Last Update for Incidents
+                    right_on='Incident_Number_temp',
+                    suffixes=('', '_inc_merged')
+                )
+                if 'Incident_Number_temp_inc_merged' in df_enriched.columns:
+                     df_enriched.drop(columns=['Incident_Number_temp_inc_merged'], inplace=True)
+                elif 'Incident_Number_temp' in df_enriched.columns :
+                     df_enriched.drop(columns=['Incident_Number_temp'], inplace=True, errors='ignore')
+
                 incident_mask = df_enriched['Type'] == 'Incident'
                 
-                if 'INC_Status' in df_enriched.columns:
-                    df_enriched.loc[incident_mask, 'Status'] = df_enriched.loc[incident_mask, 'INC_Status']
-                if 'INC_Last_Update' in df_enriched.columns:
-                    df_enriched.loc[incident_mask, 'Last Update'] = df_enriched.loc[incident_mask, 'INC_Last_Update']
+                if 'INC_Status_temp' in df_enriched.columns:
+                    df_enriched.loc[incident_mask, 'Status'] = df_enriched.loc[incident_mask, 'INC_Status_temp']
+                    df_enriched.drop(columns=['INC_Status_temp'], inplace=True)
+                if 'INC_Last_Update_temp' in df_enriched.columns:
+                    df_enriched.loc[incident_mask, 'Last Update'] = df_enriched.loc[incident_mask, 'INC_Last_Update_temp']
+                    df_enriched.drop(columns=['INC_Last_Update_temp'], inplace=True)
                 
-                # Update Breach Passed for incidents
-                if 'INC_Breach_Passed' in df_enriched.columns:
-                    # Ensure INC_Breach_Passed is boolean
-                    df_enriched['INC_Breach_Passed'] = df_enriched['INC_Breach_Passed'].astype(bool)
-                    incident_breach_mask = (df_enriched['Type'] == 'Incident') & (df_enriched['INC_Breach_Passed'] == True)
-                    df_enriched.loc[incident_breach_mask, 'Breach Passed'] = True
-                
-                # Drop temporary INC columns
-                inc_cols_to_drop = [col for col in ['INC_Status', 'INC_Last_Update', 'INC_Breach_Passed'] if col in df_enriched.columns]
-                if inc_cols_to_drop:
-                    df_enriched = df_enriched.drop(columns=inc_cols_to_drop)
-            else:
-                st.warning("No suitable Incident ID column found in the Incident report. Incident data cannot be merged.")
-            
-        # Clean up date columns (ensure this is done after all merges and updates)
+                if 'INC_Breach_Passed_temp' in df_enriched.columns:
+                    def map_str_to_bool_inc(value):
+                        if pd.isna(value): return None
+                        if isinstance(value, bool): return value
+                        val_lower = str(value).lower()
+                        if val_lower in ['yes', 'true', '1', 'passed', 'breached']: return True
+                        if val_lower in ['no', 'false', '0', 'failed', 'not breached']: return False
+                        return None
+
+                    mapped_inc_breach_values = df_enriched.loc[incident_mask, 'INC_Breach_Passed_temp'].apply(map_str_to_bool_inc)
+                    df_enriched.loc[incident_mask, 'Breach Passed'] = mapped_inc_breach_values
+                    df_enriched.drop(columns=['INC_Breach_Passed_temp'], inplace=True)
+
         if 'Last Update' in df_enriched.columns:
             df_enriched['Last Update'] = pd.to_datetime(df_enriched['Last Update'], errors='coerce')
         if 'Breach Date' in df_enriched.columns:
             df_enriched['Breach Date'] = pd.to_datetime(df_enriched['Breach Date'], errors='coerce')
 
-        # Calculate Case Count
         if 'Ticket Number' in df_enriched.columns and 'Type' in df_enriched.columns:
-            df_enriched['Case Count'] = df_enriched.groupby(['Ticket Number', 'Type'])['Ticket Number'].transform('size')
+            valid_ticket_mask = df_enriched['Ticket Number'].notna() & df_enriched['Type'].notna()
+            if valid_ticket_mask.any():
+                 df_enriched.loc[valid_ticket_mask, 'Case Count'] = df_enriched[valid_ticket_mask].groupby(['Ticket Number', 'Type'])['Ticket Number'].transform('size')
         else:
-            df_enriched['Case Count'] = pd.NA # Or some other appropriate default
+            df_enriched['Case Count'] = pd.NA
             
         return df_enriched
     
