@@ -351,7 +351,7 @@ with st.sidebar:
         df_main = st.session_state.main_df.copy() # Should be safe as data_loaded is True
         all_users = df_main['Current User Id'].dropna().unique().tolist()
         SELECT_ALL_USERS_OPTION = "[Select All Users]"
-        default_users_hardcoded = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa']
+        default_users_hardcoded = ['ali.babiker', 'anas.hasan', 'ahmed.mostafa','GPSSA_H.Salah','alharith.alfki']
         default_users = [u for u in default_users_hardcoded if u in all_users]
 
         if 'sidebar_user_widget_selection_controlled' not in st.session_state:
