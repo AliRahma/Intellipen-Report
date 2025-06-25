@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
 import plotly.express as px
-from utils import calculate_team_status_summary
+from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str # Added _get_week_display_str
 
 # Set page configuration
 st.set_page_config(
@@ -105,6 +105,140 @@ def set_custom_theme():
     }
     .action-button:hover {
         background-color: #1565c0;
+    }
+
+    /* Dark Mode Styles */
+    @media (prefers-color-scheme: dark) {
+        .main {
+            background-color: #0e1117; /* Streamlit's default dark background */
+            color: #fafafa; /* Light text for dark background */
+        }
+        .stApp {
+            color: #fafafa;
+        }
+        .stDataFrame, .stTable {
+            background-color: #262730; /* Darker background for tables */
+            color: #fafafa;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.5);
+        }
+        .card {
+            background-color: #262730; /* Darker card background */
+            color: #fafafa;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        .metric-value {
+            color: #fafafa;
+        }
+        .metric-label {
+            color: #aaa; /* Lighter grey for labels */
+        }
+        h1, h2, h3 {
+            color: #5c9dff; /* A lighter blue for headings */
+        }
+        /* Adjust badge colors for dark mode */
+        .badge-pending {
+            background-color: #533f00; /* Darker yellow */
+            color: #ffecb3;
+        }
+        .badge-complete {
+            background-color: #1b5e20; /* Darker green */
+            color: #c8e6c9;
+        }
+        .badge-in-progress {
+            background-color: #0d47a1; /* Darker blue */
+            color: #bbdefb;
+        }
+        .badge-cancelled {
+            background-color: #b71c1c; /* Darker red */
+            color: #ffcdd2;
+        }
+        .badge-breach {
+            background-color: #d32f2f; /* Slightly different red for breach */
+            color: white;
+        }
+        .action-button {
+            background-color: #5c9dff; /* Lighter blue for buttons */
+            color: #0e1117; /* Dark text for light buttons */
+        }
+        .action-button:hover {
+            background-color: #4a80cc; /* Darker shade of the button blue for hover */
+        }
+
+        /* Ensure selectbox and multiselect dropdowns are styled for dark mode */
+        div[data-baseweb="select"] > div, div[data-baseweb="multiselect"] > div {
+            background-color: #262730 !important;
+            color: #fafafa !important;
+            border: 1px solid #555 !important;
+        }
+        div[data-baseweb="select"] input, div[data-baseweb="multiselect"] input {
+            color: #fafafa !important;
+        }
+        /* Dropdown menu items */
+        div[data-baseweb="menu"] li {
+            background-color: #262730 !important;
+            color: #fafafa !important;
+        }
+        div[data-baseweb="menu"] li:hover {
+            background-color: #383943 !important;
+        }
+
+        /* Ensure text inputs are styled for dark mode */
+        .stTextInput input, .stTextArea textarea, .stDateInput input {
+            background-color: #262730 !important;
+            color: #fafafa !important;
+            border: 1px solid #555 !important;
+        }
+
+        /* Style for option menu in dark mode */
+        nav[role="tablist"] > a {
+            color: #bbb !important; /* Lighter text for non-selected tabs */
+        }
+        nav[role="tablist"] > a.nav-link-selected {
+            background-color: #5c9dff !important; /* Selected tab background */
+            color: #0e1117 !important; /* Dark text on selected tab */
+        }
+        nav[role="tablist"] > a:hover {
+            background-color: #383943 !important; /* Hover for non-selected tabs */
+            color: #fafafa !important;
+        }
+
+        /* Ensure Streamlit buttons are styled */
+        .stButton>button {
+            background-color: #5c9dff !important;
+            color: #0e1117 !important;
+            border: 1px solid #5c9dff !important;
+        }
+        .stButton>button:hover {
+            background-color: #4a80cc !important;
+            border: 1px solid #4a80cc !important;
+            color: #0e1117 !important;
+        }
+        .stDownloadButton>button {
+            background-color: #5c9dff !important;
+            color: #0e1117 !important;
+            border: 1px solid #5c9dff !important;
+        }
+        .stDownloadButton>button:hover {
+            background-color: #4a80cc !important;
+            border: 1px solid #4a80cc !important;
+            color: #0e1117 !important;
+        }
+        /* Sidebar styling */
+        .css-1d391kg { /* This class might be Streamlit version specific, targets sidebar */
+            background-color: #1a1c22 !important;
+        }
+        .css-1d391kg .stMarkdown, .css-1d391kg .stSubheader, .css-1d391kg .stTitle {
+             color: #fafafa !important;
+        }
+         /* Adjusting table header in dark mode */
+        div[data-testid="stDataFrame"] th {
+            background-color: #383943 !important; /* Darker header for tables */
+            color: #fafafa !important;
+        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -462,8 +596,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["Analysis", "SLA Breach", "Today's SR/Incidents", "Incident Overview"],
-        icons=["kanban", "exclamation-triangle", "calendar-date", "clipboard-data"],
+        options=["Analysis", "SLA Breach", "Today's SR/Incidents", "Incident Overview", "SR Overview"],
+        icons=["kanban", "exclamation-triangle", "calendar-date", "clipboard-data", "bar-chart-line"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -1367,22 +1501,37 @@ else:
 
                 SELECT_ALL_TEAMS_OPTION = SELECT_ALL_BASE_STRING % "Teams"
 
+                # Define the desired default teams
+                default_teams_to_select = ["GPSSA App Team L1", "GPSSA App Team L3"]
+
                 if 'incident_team_widget_selection_controlled' not in st.session_state:
-                    st.session_state.selected_teams = list(unique_teams) # Default to all selected for filtering
-                    if unique_teams: # If there are actual teams
+                    # Filter desired default teams to only those present in unique_teams
+                    actual_default_teams = [team for team in default_teams_to_select if team in unique_teams]
+
+                    if actual_default_teams:
+                        st.session_state.selected_teams = list(actual_default_teams)
+                        # Check if all unique_teams are selected by the new default
+                        if unique_teams and set(actual_default_teams) == set(unique_teams):
+                            st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
+                        else:
+                            st.session_state.incident_team_widget_selection_controlled = list(actual_default_teams)
+                    elif unique_teams: # If desired defaults are not present, but other teams are, select all (original fallback)
+                        st.session_state.selected_teams = list(unique_teams)
                         st.session_state.incident_team_widget_selection_controlled = [SELECT_ALL_TEAMS_OPTION]
-                    else: # No teams
+                    else: # No teams in data, or desired defaults not present and no other teams
+                        st.session_state.selected_teams = []
                         st.session_state.incident_team_widget_selection_controlled = []
 
                 options_for_team_widget = [SELECT_ALL_TEAMS_OPTION] + unique_teams
+                # The default for the multiselect widget is now correctly initialized in session state
                 raw_team_widget_selection = st.multiselect(
                     "Filter by Team",
                     options=options_for_team_widget,
-                    default=st.session_state.incident_team_widget_selection_controlled,
+                    default=st.session_state.incident_team_widget_selection_controlled, # This uses the initialized value
                     key="multi_select_incident_team"
                 )
 
-                prev_widget_display_state = list(st.session_state.incident_team_widget_selection_controlled)
+                prev_widget_display_state = list(st.session_state.incident_team_widget_selection_controlled) # Used for "Select All" logic
                 current_select_all_option_selected = SELECT_ALL_TEAMS_OPTION in raw_team_widget_selection
                 currently_selected_actual_items = [t for t in raw_team_widget_selection if t != SELECT_ALL_TEAMS_OPTION]
 
@@ -1717,10 +1866,296 @@ else:
         else:
             st.info("No data available to display for High-Priority Incidents based on current filters.")
 
+    #
+    # SR OVERVIEW TAB
+    #
+    elif selected == "SR Overview":
+        st.title("📊 Service Request (SR) Overview")
+        # Import the new function
+        from utils import calculate_srs_created_and_closed_per_week
+
+
+        if 'sr_df' not in st.session_state or st.session_state.sr_df is None or st.session_state.sr_df.empty:
+            st.warning(
+                "The 'SR Status Excel' has not been uploaded or is empty. "
+                "Please upload the SR status file via the sidebar to view the SR Overview."
+            )
+        else:
+            sr_overview_df = st.session_state.sr_df.copy()
+            st.markdown(f"**Total SRs Loaded:** {len(sr_overview_df)}")
+
+            # Check for required columns for the new chart
+            required_cols_for_chart = ['Created On', 'LastModDateTime', 'Status']
+            missing_cols = [col for col in required_cols_for_chart if col not in sr_overview_df.columns]
+
+            if missing_cols:
+                st.error(f"The SR data must contain the following columns to generate the weekly overview: {', '.join(missing_cols)}.")
+            else:
+                # Use the new function
+                srs_weekly_combined_df = calculate_srs_created_and_closed_per_week(sr_overview_df)
+
+                if srs_weekly_combined_df.empty:
+                    st.info("No valid data found to generate the weekly SRs created/closed chart.")
+                else:
+                    # Filter data for created SRs
+                    created_df = srs_weekly_combined_df[srs_weekly_combined_df['Category'] == 'Created'].copy()
+                    # Filter data for closed SRs
+                    closed_df = srs_weekly_combined_df[srs_weekly_combined_df['Category'] == 'Closed'].copy()
+                    
+                    chart_x_axis = 'WeekDisplay'
+
+                    if not created_df.empty:
+                        st.subheader("Service Requests Created Per Week")
+                        fig_created = px.bar(
+                            created_df,
+                            x=chart_x_axis,
+                            y='Count',
+                            title="Service Requests Created Per Week",
+                            labels={'Count': 'Number of SRs Created', chart_x_axis: 'Week Period'},
+                            color_discrete_sequence=px.colors.qualitative.Plotly, # Optional: for a consistent color
+                            text='Count' # Add text to display on bars
+                        )
+                        fig_created.update_traces(texttemplate='%{text}', textposition='outside') # Show text outside bars
+                        fig_created.update_layout(xaxis_title='Week Period', yaxis_title="Number of SRs Created")
+                        st.plotly_chart(fig_created, use_container_width=True)
+                    else:
+                        st.info("No data available for 'SRs Created Per Week' chart.")
+
+                    if not closed_df.empty:
+                        st.subheader("Service Requests Closed Per Week")
+                        fig_closed = px.bar(
+                            closed_df,
+                            x=chart_x_axis,
+                            y='Count',
+                            title="Service Requests Closed Per Week: SR Status (Closed,Completed, Cancelled, Approval rejected, Rejected by ps)",
+                            labels={'Count': 'Number of SRs Closed', chart_x_axis: 'Week Period'},
+                            color_discrete_sequence=px.colors.qualitative.Plotly, # Optional: pick a different color if desired e.g., px.colors.qualitative.Plotly[1:]
+                            text='Count' # Add text to display on bars
+                        )
+                        fig_closed.update_traces(texttemplate='%{text}', textposition='outside') # Show text outside bars
+                        fig_closed.update_layout(xaxis_title='Week Period', yaxis_title="Number of SRs Closed")
+                        st.plotly_chart(fig_closed, use_container_width=True)
+                    else:
+                        st.info("No data available for 'SRs Closed Per Week' chart.")
+
+                st.markdown("---")
+                st.subheader("Filterable SR Data")
+
+                # Prepare data for table display and its filters
+                table_display_df = sr_overview_df.copy() # This is the raw SR data for the table
+                week_map_for_filter = {}
+                week_options_for_multiselect = []
+
+                # Populate week filter options from the combined data used for the chart
+                if 'srs_weekly_combined_df' in locals() and not srs_weekly_combined_df.empty:
+                    if 'WeekDisplay' in srs_weekly_combined_df.columns and 'Year-Week' in srs_weekly_combined_df.columns:
+                        unique_week_options_df = srs_weekly_combined_df[['Year-Week', 'WeekDisplay']].drop_duplicates().sort_values(by='Year-Week')
+                        week_options_for_multiselect = unique_week_options_df['WeekDisplay'].tolist()
+                        for _, row in unique_week_options_df.iterrows():
+                            week_map_for_filter[row['WeekDisplay']] = row['Year-Week']
+                
+                # The table_display_df needs 'Created On' and 'Year-Week' for filtering logic below
+                if 'Created On' in table_display_df.columns:
+                    table_display_df['Created On'] = pd.to_datetime(table_display_df['Created On'], errors='coerce')
+                    # Keep rows with valid 'Created On' for the table, as filtering is based on this
+                    table_display_df.dropna(subset=['Created On'], inplace=True) 
+                    if not table_display_df.empty:
+                         table_display_df['Year-Week'] = table_display_df['Created On'].dt.strftime('%G-W%V')
+                else:
+                    # If 'Created On' is not in table_display_df, week filtering on it won't work.
+                    # Ensure 'Year-Week' column doesn't cause issues if it was expected.
+                    if 'Year-Week' in table_display_df.columns: # Should not exist if 'Created On' didn't
+                        pass # Or handle appropriately, e.g. disable week filter. For now, it will just be empty.
+
+                col_filter1, col_filter2 = st.columns(2)
+
+                with col_filter1:
+                    selected_week_displays = st.multiselect(
+                        "Filter by Week Period:",
+                        options=week_options_for_multiselect,
+                        default=[]
+                    )
+
+                with col_filter2:
+                    # Corrected min_value and max_value for date_input
+                    min_date_val = table_display_df['Created On'].min().date() if not table_display_df.empty and 'Created On' in table_display_df.columns and not table_display_df['Created On'].dropna().empty else None
+                    max_date_val = table_display_df['Created On'].max().date() if not table_display_df.empty and 'Created On' in table_display_df.columns and not table_display_df['Created On'].dropna().empty else None
+                    selected_day = st.date_input("Filter by Specific Day (Created On):", value=None, min_value=min_date_val, max_value=max_date_val)
+
+                # Apply filters to table_display_df
+                if selected_day:
+                    table_display_df = table_display_df[table_display_df['Created On'].dt.date == selected_day]
+                elif selected_week_displays:
+                    selected_year_weeks_short = [week_map_for_filter[wd] for wd in selected_week_displays if wd in week_map_for_filter]
+                    if selected_year_weeks_short:
+                         table_display_df = table_display_df[table_display_df['Year-Week'].isin(selected_year_weeks_short)]
+
+                # Display total row count using table_display_df
+                st.markdown(f"**Total Displayed SRs:** {len(table_display_df)}")
+
+                # Column selector using table_display_df
+                if not table_display_df.empty:
+                    all_columns = table_display_df.columns.tolist()
+                    # Remove 'Year-Week' from selectable columns if it was added for filtering only
+                    if 'Year-Week' in all_columns:
+                        all_columns.remove('Year-Week')
+
+                    default_cols = ['Service Request', 'Status', 'Created On']
+                    sanitized_default_cols = [col for col in default_cols if col in all_columns]
+
+                    if 'filterable_sr_data_cols_multiselect' not in st.session_state:
+                        st.session_state.filterable_sr_data_cols_multiselect = sanitized_default_cols
+
+                    selected_columns = st.multiselect(
+                        "Select columns to display for Filterable SR Data:",
+                        options=all_columns, # Offer all columns from the filtered DF
+                        default=st.session_state.filterable_sr_data_cols_multiselect,
+                        key="multiselect_filterable_sr_data"
+                    )
+                    st.session_state.filterable_sr_data_cols_multiselect = selected_columns
+
+
+                    if selected_columns:
+                        st.dataframe(table_display_df[selected_columns], hide_index=True)
+                    else:
+                        # Show all (minus internal Year-Week) if no columns are selected but data exists
+                        st.dataframe(table_display_df[[col for col in all_columns if col != 'Year-Week']] if 'Year-Week' in all_columns else table_display_df, hide_index=True)
+                else:
+                    st.info("No SR data to display based on current filters for Filterable SR Data.")
+
+                st.markdown("---") # Separator before the new Closed SRs table
+
+                # --- Closed SRs Table ---
+                st.subheader("Closed Service Requests")
+
+                # Essential columns for this section
+                essential_cols_closed_sr = ['Status', 'LastModDateTime']
+                missing_essential_cols = [col for col in essential_cols_closed_sr if col not in sr_overview_df.columns]
+
+                if missing_essential_cols:
+                    st.warning(f"The uploaded SR data is missing the following essential column(s) for the Closed SRs table: {', '.join(missing_essential_cols)}. This table cannot be displayed.")
+                else:
+                    closed_sr_statuses = ["closed", "completed", "cancelled", "approval rejected", "rejected by ps"]
+                    # Filter SRs that have one of the closed statuses
+                    closed_srs_df = sr_overview_df[
+                        sr_overview_df['Status'].astype(str).str.lower().str.strip().isin(closed_sr_statuses)
+                    ].copy()
+
+                    # Convert LastModDateTime to datetime and generate 'Closure-Year-Week'
+                    closed_srs_df['LastModDateTime'] = pd.to_datetime(closed_srs_df['LastModDateTime'], errors='coerce', dayfirst=True, infer_datetime_format=True)
+                    closed_srs_df.dropna(subset=['LastModDateTime'], inplace=True) # Remove rows where LastModDateTime couldn't be parsed
+
+                    if not closed_srs_df.empty:
+                        closed_srs_df['Closure-Year-Week'] = closed_srs_df['LastModDateTime'].dt.strftime('%G-W%V')
+                    else:
+                        # Ensure the column exists even if empty, for consistency in later steps
+                        closed_srs_df['Closure-Year-Week'] = pd.Series(dtype='str')
+
+
+                    # Prepare week filter options based on LastModDateTime of closed SRs
+                    # This is different from the main week_options_for_multiselect which is based on Created On of all SRs
+                    closed_sr_week_map_for_filter = {}
+                    closed_sr_week_options_for_multiselect = []
+                    if not closed_srs_df.empty and 'Closure-Year-Week' in closed_srs_df.columns:
+                        unique_closed_week_options_df = closed_srs_df[['Closure-Year-Week']].copy()
+                        unique_closed_week_options_df.dropna(subset=['Closure-Year-Week'], inplace=True)
+                        # Apply the _get_week_display_str helper to the 'Closure-Year-Week'
+                        # Ensure _get_week_display_str is available or define it if it's moved/not imported
+                        # For now, assuming _get_week_display_str is accessible
+                        unique_closed_week_options_df['WeekDisplay'] = unique_closed_week_options_df['Closure-Year-Week'].apply(_get_week_display_str)
+                        unique_closed_week_options_df = unique_closed_week_options_df[['Closure-Year-Week', 'WeekDisplay']].drop_duplicates().sort_values(by='Closure-Year-Week')
+
+                        closed_sr_week_options_for_multiselect = unique_closed_week_options_df['WeekDisplay'].tolist()
+                        for _, row in unique_closed_week_options_df.iterrows():
+                            closed_sr_week_map_for_filter[row['WeekDisplay']] = row['Closure-Year-Week']
+
+
+                    col_filter_closed_sr1, col_filter_closed_sr2 = st.columns(2)
+
+                    with col_filter_closed_sr1:
+                        selected_week_displays_closed = st.multiselect(
+                            "Filter Closed SRs by Closure Week Period:",
+                            options=closed_sr_week_options_for_multiselect,
+                            default=[],
+                            key="closed_sr_closure_week_filter"
+                        )
+
+                    with col_filter_closed_sr2:
+                        min_date_val_closed = closed_srs_df['LastModDateTime'].min().date() if not closed_srs_df.empty and not closed_srs_df['LastModDateTime'].dropna().empty else None
+                        max_date_val_closed = closed_srs_df['LastModDateTime'].max().date() if not closed_srs_df.empty and not closed_srs_df['LastModDateTime'].dropna().empty else None
+                        selected_day_closed = st.date_input(
+                            "Filter Closed SRs by Specific Closure Day:",
+                            value=None,
+                            min_value=min_date_val_closed,
+                            max_value=max_date_val_closed,
+                            key="closed_sr_closure_day_filter"
+                        )
+
+                    # Apply filters to closed_srs_df
+                    filtered_closed_srs_df = closed_srs_df.copy()
+
+                    if selected_day_closed:
+                        # Ensure LastModDateTime is date part for comparison
+                        filtered_closed_srs_df = filtered_closed_srs_df[filtered_closed_srs_df['LastModDateTime'].dt.date == selected_day_closed]
+                    elif selected_week_displays_closed:
+                        if 'Closure-Year-Week' in filtered_closed_srs_df.columns and closed_sr_week_map_for_filter:
+                            selected_closure_year_weeks_short = [closed_sr_week_map_for_filter[wd] for wd in selected_week_displays_closed if wd in closed_sr_week_map_for_filter]
+                            if selected_closure_year_weeks_short:
+                                filtered_closed_srs_df = filtered_closed_srs_df[filtered_closed_srs_df['Closure-Year-Week'].isin(selected_closure_year_weeks_short)]
+
+                    st.markdown(f"**Total Displayed Closed SRs (filtered by closure date):** {len(filtered_closed_srs_df)}")
+
+                    if not filtered_closed_srs_df.empty: # This is line 2108 approx.
+                        all_closed_columns = filtered_closed_srs_df.columns.tolist() # Line 2109 - Start of block to indent
+                        # Remove internal helper columns from user selection options
+                        # 'Closure-Year-Week' is the one specifically created for this table's filtering.
+                        # 'Year-Week' might exist if it was in the original sr_overview_df from created_on processing.
+                        internal_cols_to_remove = ['Closure-Year-Week', 'Year-Week']
+                        for col_to_remove in internal_cols_to_remove:
+                            if col_to_remove in all_closed_columns:
+                                all_closed_columns.remove(col_to_remove)
+
+                        default_closed_cols = ['Service Request', 'Status', 'Created On', 'LastModDateTime', 'Resolution'] # Example, adjust as needed
+                        sanitized_default_closed_cols = [col for col in default_closed_cols if col in all_closed_columns]
+
+                        if 'closed_sr_data_cols_multiselect' not in st.session_state:
+                            st.session_state.closed_sr_data_cols_multiselect = sanitized_default_closed_cols
+
+                        selected_closed_columns = st.multiselect(
+                            "Select columns to display for Closed SRs:",
+                            options=all_closed_columns,
+                            default=st.session_state.closed_sr_data_cols_multiselect,
+                            key="multiselect_closed_sr_data"
+                        )
+                        st.session_state.closed_sr_data_cols_multiselect = selected_closed_columns
+
+                        if selected_closed_columns:
+                            st.dataframe(filtered_closed_srs_df[selected_closed_columns], hide_index=True)
+                        else:
+                            # Show all available (minus internal Year-Week) if no columns selected but data exists
+                            # Ensure we use the correct list of all_closed_columns (which has helpers removed)
+                            st.dataframe(filtered_closed_srs_df[all_closed_columns] if all_closed_columns else filtered_closed_srs_df, hide_index=True)
+
+                        # Download button for Closed SRs
+                        # Ensure download uses the correct set of columns (selected or all available for display)
+                        cols_for_download = selected_closed_columns if selected_closed_columns else all_closed_columns
+                        excel_closed_sr_data = generate_excel_download(filtered_closed_srs_df[cols_for_download] if cols_for_download else filtered_closed_srs_df)
+                        st.download_button(
+                            label="📥 Download Closed SRs Data",
+                            data=excel_closed_sr_data,
+                            file_name=f"closed_srs_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_closed_srs"
+                        )
+                    # This else corresponds to 'if not filtered_closed_srs_df.empty:'
+                    else:
+                        st.info("No Closed SR data to display based on current filters.")
+
+
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ V3.5 | Developed by Ali Babiker | © June 2025
+    Intellipen SmartQ V3.6 | Developed by Ali Babiker | © June 2025
     </div>""",
     unsafe_allow_html=True
 )
