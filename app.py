@@ -19,6 +19,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Import the new function from utils
+from utils import calculate_incidents_breached_per_week
+
 # Custom CSS for styling
 def set_custom_theme():
     st.markdown("""
@@ -464,6 +467,35 @@ with st.sidebar:
                 overview_df = incident_df.copy()
                 if "Customer" in overview_df.columns:
                     overview_df.rename(columns={"Customer": "Creator"}, inplace=True)
+                # Attempt to parse 'Breach Date' right after loading incident_overview_df
+                if 'Breach Date' in overview_df.columns:
+                    col_name = 'Breach Date'
+                    original_series = overview_df[col_name].copy().astype(str) # Work with string representations
+                    overview_df[col_name] = pd.NaT # Initialize with NaT
+
+                    # Step 1: Try specific known formats (day-first)
+                    formats_to_try = ['%d/%m/%Y %H:%M:%S', '%d/%m/%y %H:%M', '%d/%m/%Y']
+                    for fmt in formats_to_try:
+                        mask = overview_df[col_name].isnull() & original_series.notnull()
+                        if not mask.any(): break
+                        parsed_subset = pd.to_datetime(original_series[mask], format=fmt, errors='coerce')
+                        overview_df.loc[mask, col_name] = overview_df.loc[mask, col_name].fillna(parsed_subset)
+
+                    # Step 2: Try standard parsing (handles ISO, etc.) for remaining nulls
+                    mask = overview_df[col_name].isnull() & original_series.notnull()
+                    if mask.any():
+                        iso_parsed = pd.to_datetime(original_series[mask], errors='coerce')
+                        overview_df.loc[mask, col_name] = overview_df.loc[mask, col_name].fillna(iso_parsed)
+
+                    # Step 3: Try general dayfirst=True parsing for remaining nulls
+                    mask = overview_df[col_name].isnull() & original_series.notnull()
+                    if mask.any():
+                        dayfirst_gen_parsed = pd.to_datetime(original_series[mask], errors='coerce', dayfirst=True)
+                        overview_df.loc[mask, col_name] = overview_df.loc[mask, col_name].fillna(dayfirst_gen_parsed)
+
+                    # Optionally, log how many failed to parse if necessary, or notify user.
+                    # For now, we proceed with successfully parsed dates.
+
                 st.session_state.incident_overview_df = overview_df
                 st.success(f"Incident Overview data loaded: {len(overview_df)} records, {len(overview_df.columns)} columns.")
             else:
@@ -782,8 +814,31 @@ else:
 
         if 'Last Update' in df_enriched.columns:
             df_enriched['Last Update'] = pd.to_datetime(df_enriched['Last Update'], errors='coerce')
+
         if 'Breach Date' in df_enriched.columns:
-            df_enriched['Breach Date'] = pd.to_datetime(df_enriched['Breach Date'], errors='coerce')
+            col_name_en = 'Breach Date'
+            original_series_en = df_enriched[col_name_en].copy().astype(str)
+            df_enriched[col_name_en] = pd.NaT
+
+            # Step 1: Try specific known formats (day-first)
+            formats_to_try = ['%d/%m/%Y %H:%M:%S', '%d/%m/%y %H:%M', '%d/%m/%Y']
+            for fmt in formats_to_try:
+                mask_en = df_enriched[col_name_en].isnull() & original_series_en.notnull()
+                if not mask_en.any(): break
+                parsed_subset_en = pd.to_datetime(original_series_en[mask_en], format=fmt, errors='coerce')
+                df_enriched.loc[mask_en, col_name_en] = df_enriched.loc[mask_en, col_name_en].fillna(parsed_subset_en)
+
+            # Step 2: Try standard parsing (handles ISO, etc.) for remaining nulls
+            mask_en = df_enriched[col_name_en].isnull() & original_series_en.notnull()
+            if mask_en.any():
+                iso_parsed_en = pd.to_datetime(original_series_en[mask_en], errors='coerce')
+                df_enriched.loc[mask_en, col_name_en] = df_enriched.loc[mask_en, col_name_en].fillna(iso_parsed_en)
+
+            # Step 3: Try general dayfirst=True parsing for remaining nulls
+            mask_en = df_enriched[col_name_en].isnull() & original_series_en.notnull()
+            if mask_en.any():
+                dayfirst_gen_parsed_en = pd.to_datetime(original_series_en[mask_en], errors='coerce', dayfirst=True)
+                df_enriched.loc[mask_en, col_name_en] = df_enriched.loc[mask_en, col_name_en].fillna(dayfirst_gen_parsed_en)
 
         if 'Ticket Number' in df_enriched.columns and 'Type' in df_enriched.columns:
             valid_ticket_mask = df_enriched['Ticket Number'].notna() & df_enriched['Type'].notna()
@@ -1426,6 +1481,10 @@ else:
     elif selected == "Incident Overview":
         st.title("📋 Incident Overview")
 
+        # Define PAP category specifics early to ensure they are in scope
+        pap_category_column = 'Category'
+        pap_category_value = 'Pension Application Platform (PAP)'
+
         SELECT_ALL_BASE_STRING = "[Select All %s]"
 
         if 'incident_overview_df' not in st.session_state or st.session_state.incident_overview_df is None or st.session_state.incident_overview_df.empty:
@@ -1687,48 +1746,321 @@ else:
             # Calculate team and status totals
             team_status_summary_df = calculate_team_status_summary(filtered_overview_df)
 
-                    # --- Pie Chart for Closed Incidents ---
-            st.markdown("---") # Visual separator before the pie chart
-            if 'Status' in overview_df.columns: # Ensure 'Status' column exists in the original overview_df
+        # --- Charts Display: Percentage of Closed Incidents and Team Assignment Distribution ---
+        # Use columns to display charts side-by-side
+        chart_col1, chart_col2 = st.columns(2)
+
+        with chart_col1:
+            st.subheader("Percentage of Closed Incidents")
+            if 'Status' in overview_df.columns: # Ensure 'Status' column exists in the original overview_df for this chart
                 closed_count = overview_df[overview_df['Status'] == 'Closed'].shape[0]
                 total_incidents = overview_df.shape[0]
                 other_count = total_incidents - closed_count
 
                 if total_incidents > 0: # Avoid division by zero if no incidents
-                    chart_data = pd.DataFrame({
+                    chart_data_status_pie = pd.DataFrame({ # Use a unique variable name for this chart's data
                         'Status Category': ['Closed', 'Open/Other'],
                         'Count': [closed_count, other_count]
                     })
-                    fig_status_pie = px.pie(chart_data, names='Status Category', values='Count', title='Percentage of Closed Incidents')
-                    st.plotly_chart(fig_status_pie, use_container_width=True)
+                    # Pass a unique key to this plotly_chart instance
+                    fig_status_pie = px.pie(chart_data_status_pie, names='Status Category', values='Count', title='Percentage of Closed Incidents')
+                    st.plotly_chart(fig_status_pie, use_container_width=True, key="status_pie_chart")
                 else:
                     st.info("No incident data available to display the status pie chart.")
             else:
-                st.warning("Cannot display Percentage of Closed Incidents: 'Status' column missing from source data.")
-        # --- Team Assignment Distribution ---
-        st.markdown("---") # Visual separator
-        st.subheader("Team Assignment Distribution")
-        if not filtered_overview_df.empty:
-            if 'Team' in filtered_overview_df.columns:
-                team_distribution_data = filtered_overview_df['Team'].value_counts()
-                
-                if not team_distribution_data.empty:
-                    fig_team_dist = px.pie(
-                        team_distribution_data,
-                        names=team_distribution_data.index,
-                        values=team_distribution_data.values,
-                        title="Distribution of Incidents by Team"
-                    )
-                    fig_team_dist.update_traces(textposition='inside', textinfo='percent+label')
-                    st.plotly_chart(fig_team_dist, use_container_width=True)
+                st.warning("Cannot display Percentage of Closed Incidents: 'Status' column missing from source data (for status pie chart).")
+
+        with chart_col2:
+            st.subheader("Team Assignment Distribution")
+            if not filtered_overview_df.empty:
+                if 'Team' in filtered_overview_df.columns:
+                    team_distribution_data = filtered_overview_df['Team'].value_counts()
+
+                    if not team_distribution_data.empty:
+                        fig_team_dist = px.pie(
+                            team_distribution_data,
+                            names=team_distribution_data.index,
+                            values=team_distribution_data.values,
+                            title="Distribution of Incidents by Team"
+                        )
+                        fig_team_dist.update_traces(textposition='inside', textinfo='percent+label')
+                        st.plotly_chart(fig_team_dist, use_container_width=True)
+                    else:
+                        st.info("No team assignment data to display based on current filters.")
                 else:
-                    st.info("No team assignment data to display based on current filters.")
+                    st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
             else:
-                st.warning("Cannot display Team Assignment Distribution: 'Team' column not found in the data.")
-        else:
-            st.info("No data available to display for Team Assignment Distribution based on current filters.")
-        # --- Incidents by Team and Status Table ---
+                st.info("No data available to display for Team Assignment Distribution based on current filters.")
+
         st.markdown("---") # Visual separator
+
+        # --- Incidents Breached Per Week Graph ---
+        st.subheader("Incidents Breached Per Week")
+        if 'incident_overview_df' in st.session_state and st.session_state.incident_overview_df is not None and not st.session_state.incident_overview_df.empty:
+            # Make a copy to avoid modifying the session state DataFrame directly during processing
+            inc_breach_df_source = st.session_state.incident_overview_df.copy()
+
+            if 'Breach Date' in inc_breach_df_source.columns:
+                # Ensure 'Breach Date' is present before calling the utility function
+                # The utility function itself handles parsing and errors for 'Breach Date'
+                weekly_breached_incidents_df = calculate_incidents_breached_per_week(inc_breach_df_source, breach_date_col='Breach Date')
+
+                if not weekly_breached_incidents_df.empty:
+                    fig_incidents_breached = px.bar(
+                        weekly_breached_incidents_df,
+                        x='WeekDisplay',
+                        y='Count',
+                        title="Incidents Breached Per Week",
+                        labels={'Count': 'Number of Incidents Breached', 'WeekDisplay': 'Week Period'},
+                        text='Count'
+                    )
+                    fig_incidents_breached.update_traces(texttemplate='%{text}', textposition='outside')
+                    fig_incidents_breached.update_layout(xaxis_title='Week Period', yaxis_title="Number of Incidents Breached")
+                    st.plotly_chart(fig_incidents_breached, use_container_width=True)
+                else:
+                    st.info("No data available to display the 'Incidents Breached Per Week' chart. This may be due to missing or invalid 'Breach Date' values in the uploaded incident data.")
+            else:
+                st.warning("The 'Breach Date' column is missing from the uploaded incident data. Cannot generate 'Incidents Breached Per Week' chart.")
+        else:
+            st.info("Incident data not loaded or empty. Please upload incident data to see the breached incidents chart.")
+
+        st.markdown("---") # Visual separator
+
+        # --- Detailed Breached Incidents Table with Column Selection ---
+        st.subheader("Detailed Breached Incidents")
+        if 'incident_overview_df' in st.session_state and \
+           st.session_state.incident_overview_df is not None and \
+           not st.session_state.incident_overview_df.empty:
+
+            detailed_breach_source_df = st.session_state.incident_overview_df.copy()
+
+            if 'Breach Date' in detailed_breach_source_df.columns:
+                col_name_detail = 'Breach Date'
+                parsed_col_name_detail = 'Breach Date Parsed'
+                original_series_detail = detailed_breach_source_df[col_name_detail].copy().astype(str)
+                detailed_breach_source_df[parsed_col_name_detail] = pd.NaT
+
+                # Step 1: Try specific known formats (day-first)
+                formats_to_try = ['%d/%m/%Y %H:%M:%S', '%d/%m/%y %H:%M', '%d/%m/%Y']
+                for fmt in formats_to_try:
+                    mask_detail = detailed_breach_source_df[parsed_col_name_detail].isnull() & original_series_detail.notnull()
+                    if not mask_detail.any(): break
+                    parsed_subset_detail = pd.to_datetime(original_series_detail[mask_detail], format=fmt, errors='coerce')
+                    detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail] = detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail].fillna(parsed_subset_detail)
+
+                # Step 2: Try standard parsing (handles ISO, etc.) for remaining nulls
+                mask_detail = detailed_breach_source_df[parsed_col_name_detail].isnull() & original_series_detail.notnull()
+                if mask_detail.any():
+                    iso_parsed_detail = pd.to_datetime(original_series_detail[mask_detail], errors='coerce')
+                    detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail] = detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail].fillna(iso_parsed_detail)
+
+                # Step 3: Try general dayfirst=True parsing for remaining nulls
+                mask_detail = detailed_breach_source_df[parsed_col_name_detail].isnull() & original_series_detail.notnull()
+                if mask_detail.any():
+                    dayfirst_gen_parsed_detail = pd.to_datetime(original_series_detail[mask_detail], errors='coerce', dayfirst=True)
+                    detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail] = detailed_breach_source_df.loc[mask_detail, parsed_col_name_detail].fillna(dayfirst_gen_parsed_detail)
+
+                # Filter for incidents that have a valid (parsed) breach date
+                all_breached_incidents_df = detailed_breach_source_df.dropna(subset=['Breach Date Parsed'])
+
+                # We can drop the temporary parsed column if we show the original 'Breach Date'
+                # However, it might be useful to keep the parsed one for sorting or display consistency.
+                # For now, let's assume we want to display columns from the original df structure.
+                # So, we use 'all_breached_incidents_df' to identify rows, but select columns from 'detailed_breach_source_df' (before dropping 'Breach Date Parsed') or even better, from original `overview_df` by index.
+
+                # Let's use the indices from `all_breached_incidents_df` to filter the original `st.session_state.incident_overview_df`
+                # to ensure we are showing original data and all its columns.
+
+                displayable_breached_incidents_df = st.session_state.incident_overview_df.loc[all_breached_incidents_df.index].copy() # Use .copy() to avoid SettingWithCopyWarning
+
+                # Ensure 'Breach Date' is datetime for further operations (like deriving Year-Week or day filtering)
+                # This should already be the case due to earlier parsing, but explicitly ensuring it here if it's re-read or copied.
+                if 'Breach Date' in displayable_breached_incidents_df.columns:
+                    displayable_breached_incidents_df['Breach Date'] = pd.to_datetime(displayable_breached_incidents_df['Breach Date'], errors='coerce')
+                    # Add 'Year-Week' column for filtering, if 'Breach Date' is valid datetime
+                    if pd.api.types.is_datetime64_any_dtype(displayable_breached_incidents_df['Breach Date']):
+                        displayable_breached_incidents_df['Year-Week'] = displayable_breached_incidents_df['Breach Date'].dt.strftime('%G-W%V')
+                    else:
+                        # Fallback if 'Breach Date' is not datetime (should not happen if parsing worked)
+                        displayable_breached_incidents_df['Year-Week'] = None
+                else:
+                     displayable_breached_incidents_df['Year-Week'] = None # Ensure column exists even if 'Breach Date' is missing
+
+
+                if not displayable_breached_incidents_df.empty:
+                    st.markdown(f"Found **{len(displayable_breached_incidents_df)}** incidents with a valid breach date (before applying week/day filters).")
+
+                    # --- Week and Day Filters for Detailed Table (Category filter removed) ---
+                    filter_col1, filter_col2 = st.columns(2) # Reverted to 2 columns
+                    selected_week_displays_breach = []
+                    selected_day_breach = None
+                    # selected_categories_breach variable is no longer needed here
+
+                    with filter_col1:
+                        if 'weekly_breached_incidents_df' in locals() and not weekly_breached_incidents_df.empty and 'WeekDisplay' in weekly_breached_incidents_df.columns:
+                            week_options_breach = ["All Weeks"] + weekly_breached_incidents_df['WeekDisplay'].unique().tolist()
+                            if 'breach_week_filter_selection' not in st.session_state:
+                                st.session_state.breach_week_filter_selection = ["All Weeks"]
+
+                            selected_week_displays_breach = st.multiselect(
+                                "Filter by Week Period (Breach Date):",
+                                options=week_options_breach,
+                                default=st.session_state.breach_week_filter_selection,
+                                key="multiselect_breach_week_period"
+                            )
+                            st.session_state.breach_week_filter_selection = selected_week_displays_breach
+                        else:
+                            st.caption("Week filter not available (no weekly breach data).")
+
+                    with filter_col2:
+                        if 'Breach Date' in displayable_breached_incidents_df.columns and not displayable_breached_incidents_df['Breach Date'].dropna().empty:
+                            min_breach_date = displayable_breached_incidents_df['Breach Date'].dropna().min().date()
+                            max_breach_date = displayable_breached_incidents_df['Breach Date'].dropna().max().date()
+                            selected_day_breach = st.date_input(
+                                "Filter by Specific Day (Breach Date):",
+                                value=None,
+                                min_value=min_breach_date,
+                                max_value=max_breach_date,
+                                key="date_input_breach_specific_day"
+                            )
+                        else:
+                            st.caption("Day filter not available (no valid breach dates).")
+
+                    # Prepare for filtering - this df will be further filtered
+                    filtered_detailed_breached_incidents_df = displayable_breached_incidents_df.copy()
+
+                    # Apply Day Filter (takes precedence)
+                    if selected_day_breach:
+                        if 'Breach Date' in filtered_detailed_breached_incidents_df.columns and \
+                           pd.api.types.is_datetime64_any_dtype(filtered_detailed_breached_incidents_df['Breach Date']):
+                            filtered_detailed_breached_incidents_df = filtered_detailed_breached_incidents_df[
+                                filtered_detailed_breached_incidents_df['Breach Date'].dt.date == selected_day_breach
+                            ]
+                            st.session_state.breach_week_filter_selection = ["All Weeks"]
+
+                    # Apply Week Filter (if no day filter is active and a specific week is chosen)
+                    elif selected_week_displays_breach and "All Weeks" not in selected_week_displays_breach:
+                        if 'weekly_breached_incidents_df' in locals() and not weekly_breached_incidents_df.empty and \
+                           'Year-Week' in weekly_breached_incidents_df.columns and \
+                           'Year-Week' in filtered_detailed_breached_incidents_df.columns:
+
+                            week_map_breach = pd.Series(
+                                weekly_breached_incidents_df['Year-Week'].values,
+                                index=weekly_breached_incidents_df['WeekDisplay']
+                            ).to_dict()
+
+                            selected_year_weeks_breach = [
+                                week_map_breach[wd] for wd in selected_week_displays_breach if wd in week_map_breach
+                            ]
+
+                            if selected_year_weeks_breach:
+                                filtered_detailed_breached_incidents_df = filtered_detailed_breached_incidents_df[
+                                    filtered_detailed_breached_incidents_df['Year-Week'].isin(selected_year_weeks_breach)
+                                ]
+                    # Category filter logic removed here
+
+                    # Update the count message after all filters
+                    st.markdown(f"Displaying **{len(filtered_detailed_breached_incidents_df)}** '{pap_category_value}' breached incidents based on current filters.")
+
+
+                    all_breached_incident_columns = filtered_detailed_breached_incidents_df.columns.tolist() # This will include 'Year-Week' if present
+                    SELECT_ALL_COLS_BREACH_DETAIL_OPTION = "[Select All Columns for Breached Incidents]"
+
+                    # Add 'Year-Week' to default columns if it exists in the source
+                    default_breach_detail_cols = ["Incident", "Creator", "Team", "Priority", "Status", "Breach Date"]
+                    if 'Year-Week' in all_breached_incident_columns:
+                        default_breach_detail_cols.append('Year-Week')
+
+                    actual_default_breach_detail_cols = [col for col in default_breach_detail_cols if col in all_breached_incident_columns]
+
+                    if 'breached_incident_detail_cols_controlled' not in st.session_state:
+                        st.session_state.selected_breach_detail_display_cols = list(actual_default_breach_detail_cols)
+                        if not actual_default_breach_detail_cols and all_breached_incident_columns:
+                            st.session_state.selected_breach_detail_display_cols = list(all_breached_incident_columns)
+                            st.session_state.breached_incident_detail_cols_controlled = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+                        elif all_breached_incident_columns and set(actual_default_breach_detail_cols) == set(all_breached_incident_columns):
+                            st.session_state.breached_incident_detail_cols_controlled = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+                        elif not all_breached_incident_columns:
+                            st.session_state.selected_breach_detail_display_cols = []
+                            st.session_state.breached_incident_detail_cols_controlled = []
+                        else:
+                             st.session_state.breached_incident_detail_cols_controlled = list(actual_default_breach_detail_cols)
+
+                    options_for_breach_detail_cols_widget = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION] + all_breached_incident_columns
+                    raw_breach_detail_cols_selection = st.multiselect(
+                        "Select columns for Detailed Breached Incidents table:",
+                        options=options_for_breach_detail_cols_widget,
+                        default=st.session_state.breached_incident_detail_cols_controlled,
+                        key="multi_select_breached_incident_detail_columns"
+                    )
+
+                    # Logic for "Select All" option for breached incident detail columns
+                    prev_widget_state_breach_detail = list(st.session_state.breached_incident_detail_cols_controlled)
+                    current_select_all_breach_detail = SELECT_ALL_COLS_BREACH_DETAIL_OPTION in raw_breach_detail_cols_selection
+                    selected_actual_items_breach_detail = [c for c in raw_breach_detail_cols_selection if c != SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+
+                    user_clicked_select_all_breach_detail = current_select_all_breach_detail and (SELECT_ALL_COLS_BREACH_DETAIL_OPTION not in prev_widget_state_breach_detail)
+                    user_clicked_unselect_all_breach_detail = (not current_select_all_breach_detail) and (SELECT_ALL_COLS_BREACH_DETAIL_OPTION in prev_widget_state_breach_detail and len(prev_widget_state_breach_detail) == 1)
+
+                    if user_clicked_select_all_breach_detail:
+                        st.session_state.selected_breach_detail_display_cols = list(all_breached_incident_columns)
+                        st.session_state.breached_incident_detail_cols_controlled = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+                    elif user_clicked_unselect_all_breach_detail:
+                        st.session_state.selected_breach_detail_display_cols = []
+                        st.session_state.breached_incident_detail_cols_controlled = []
+                    else:
+                        if current_select_all_breach_detail:
+                            if len(selected_actual_items_breach_detail) < len(all_breached_incident_columns):
+                                st.session_state.selected_breach_detail_display_cols = list(selected_actual_items_breach_detail)
+                                st.session_state.breached_incident_detail_cols_controlled = list(selected_actual_items_breach_detail)
+                            else:
+                                st.session_state.selected_breach_detail_display_cols = list(all_breached_incident_columns)
+                                st.session_state.breached_incident_detail_cols_controlled = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+                        else:
+                            st.session_state.selected_breach_detail_display_cols = list(selected_actual_items_breach_detail)
+                            if all_breached_incident_columns and set(selected_actual_items_breach_detail) == set(all_breached_incident_columns):
+                                st.session_state.breached_incident_detail_cols_controlled = [SELECT_ALL_COLS_BREACH_DETAIL_OPTION]
+                            else:
+                                st.session_state.breached_incident_detail_cols_controlled = list(selected_actual_items_breach_detail)
+
+                    columns_to_show_breach_detail = st.session_state.get('selected_breach_detail_display_cols', [])
+
+                    if not columns_to_show_breach_detail: # If list is empty (e.g. user unselected all)
+                        if actual_default_breach_detail_cols: # Try to show defaults
+                            columns_to_show_breach_detail = actual_default_breach_detail_cols
+                        elif all_breached_incident_columns: # Else show all available
+                            columns_to_show_breach_detail = all_breached_incident_columns
+                        # If still empty, the next 'if' handles it
+
+                    if columns_to_show_breach_detail:
+                        st.dataframe(filtered_detailed_breached_incidents_df[columns_to_show_breach_detail], hide_index=True, use_container_width=True)
+                    else: # This covers cases where filtered_detailed_breached_incidents_df is empty OR no columns ended up in columns_to_show_breach_detail
+                        st.info("No data or columns available to display for detailed breached incidents based on current filters and selections.")
+
+                # This 'else' correctly corresponds to 'if not displayable_breached_incidents_df.empty:'
+                else:
+                    st.info(f"No '{pap_category_value}' incidents with a valid breach date found to display details (after week/day filters or initially).")
+
+            # This 'else' correctly corresponds to 'if 'Breach Date' in pap_incidents_df.columns:'
+            # (or rather, the derived working_df_for_detailed_table)
+            else:
+                st.warning(f"The 'Breach Date' column is missing in the filtered '{pap_category_value}' incident data. Cannot display detailed breached incidents.")
+
+        # This 'elif' and 'else' handle cases where pap_incidents_df itself was empty from the start
+        elif not pap_incidents_df.empty and 'Breach Date' not in pap_incidents_df.columns:
+             st.warning(f"The 'Breach Date' column is missing from '{pap_category_value}' incidents. Cannot display detailed breaches.")
+        else: # pap_incidents_df is empty
+            # Check original source only if pap_incidents_df is empty
+            if 'incident_overview_df' not in st.session_state or st.session_state.incident_overview_df is None or st.session_state.incident_overview_df.empty:
+                st.info("Incident data not loaded or empty. Please upload incident data to see detailed breached incidents.")
+            # else: specific messages about why pap_incidents_df is empty (no PAP, or Category col missing) were shown earlier
+            # We can add a generic one here if needed for the detailed table context.
+            # elif not (st.session_state.incident_overview_df[pap_category_column].astype(str).str.strip().str.lower() == pap_category_value.strip().lower()).any():
+            #    st.info(f"No incidents of category '{pap_category_value}' found to display details.")
+
+
+        st.markdown("---") # Visual separator
+        # --- Incidents by Team and Status Table ---
         st.subheader("Incidents by Team and Status")
         # Check if 'Team' or 'Status' column was missing when team_status_summary_df was created.
         # This check is based on the columns available in filtered_overview_df, which was used to create team_status_summary_df.
@@ -2155,7 +2487,7 @@ else:
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ V3.6 | Developed by Ali Babiker | © June 2025
+    Intellipen SmartQ V4.0 | Developed by Ali Babiker | © July 2025
     </div>""",
     unsafe_allow_html=True
 )
