@@ -953,7 +953,7 @@ else:
                 
                 if not df_srs_status_valid.empty:
                     # All SR status count
-                    status_all_counts = df_srs_status_valid['Status'].value_counts().rename_axis('Status').reset_index(name='All Count')
+                    status_all_counts = df_srs_status_valid['Status'].value_counts().rename_axis('Status').reset_index(name='Cases Count')
                     
                     # Unique SR tickets
                     ticket_unique = df_srs_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'Status']].drop_duplicates()
@@ -961,12 +961,12 @@ else:
                     
                     # Merge both summaries
                     merged_status = pd.merge(status_all_counts, ticket_unique_counts, on='Status', how='outer').fillna(0)
-                    merged_status[['All Count', 'Unique Count']] = merged_status[['All Count', 'Unique Count']].astype(int)
+                    merged_status[['Cases Count', 'Unique Count']] = merged_status[['Cases Count', 'Unique Count']].astype(int)
                     
                     # Total row
                     total_row = {
                         'Status': 'Total',
-                        'All Count': merged_status['All Count'].sum(),
+                        'Cases Count': merged_status['Cases Count'].sum(),
                         'Unique Count': merged_status['Unique Count'].sum()
                     }
                     
