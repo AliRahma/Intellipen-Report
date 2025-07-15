@@ -420,8 +420,8 @@ with st.sidebar:
 
     st.subheader("📁 Data Import")
     uploaded_file = st.file_uploader("Upload Main Excel File (.xlsx)", type=["xlsx"])
-    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx","xls"])
-    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx","xls"])
+    sr_status_file = st.file_uploader("Upload SR Status Excel (optional)", type=["xlsx"])
+    incident_status_file = st.file_uploader("Upload Incident Report Excel (optional)", type=["xlsx"])
     
     # report_datetime is initialized to None at the start of the session.
     # We process files in order: Main, SR, Incident for setting it IF it's currently None.
@@ -957,17 +957,17 @@ else:
                     
                     # Unique SR tickets
                     ticket_unique = df_srs_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'Status']].drop_duplicates()
-                    ticket_unique_counts = ticket_unique['Status'].value_counts().rename_axis('Status').reset_index(name='Unique Count')
+                    ticket_unique_counts = ticket_unique['Status'].value_counts().rename_axis('Status').reset_index(name='SR Count')
                     
                     # Merge both summaries
                     merged_status = pd.merge(status_all_counts, ticket_unique_counts, on='Status', how='outer').fillna(0)
-                    merged_status[['Cases Count', 'Unique Count']] = merged_status[['Cases Count', 'Unique Count']].astype(int)
+                    merged_status[['Cases Count', 'SR Count']] = merged_status[['Cases Count', 'SR Count']].astype(int)
                     
                     # Total row
                     total_row = {
                         'Status': 'Total',
                         'Cases Count': merged_status['Cases Count'].sum(),
-                        'Unique Count': merged_status['Unique Count'].sum()
+                        'SR Count': merged_status['SR Count'].sum()
                     }
                     
                     status_summary_df = pd.concat([merged_status, pd.DataFrame([total_row])], ignore_index=True)
@@ -997,17 +997,17 @@ else:
                     
                     # Unique incident tickets
                     incident_ticket_unique = df_incidents_status_valid.dropna(subset=['Ticket Number'])[['Ticket Number', 'Status']].drop_duplicates()
-                    incident_ticket_unique_counts = incident_ticket_unique['Status'].value_counts().rename_axis('Status').reset_index(name='Unique Count')
+                    incident_ticket_unique_counts = incident_ticket_unique['Status'].value_counts().rename_axis('Status').reset_index(name='Incident Count')
                     
                     # Merge both summaries for incidents
                     merged_incident_status = pd.merge(incident_status_all_counts, incident_ticket_unique_counts, on='Status', how='outer').fillna(0)
-                    merged_incident_status[['Cases Count', 'Unique Count']] = merged_incident_status[['Cases Count', 'Unique Count']].astype(int)
+                    merged_incident_status[['Cases Count', 'Incident Count']] = merged_incident_status[['Cases Count', 'Incident Count']].astype(int)
                     
                     # Total row for incidents
                     incident_total_row = {
                         'Status': 'Total',
                         'Cases Count': merged_incident_status['Cases Count'].sum(),
-                        'Unique Count': merged_incident_status['Unique Count'].sum()
+                        'Incident Count': merged_incident_status['Incident Count'].sum()
                     }
                     
                     incident_status_summary_df = pd.concat([merged_incident_status, pd.DataFrame([incident_total_row])], ignore_index=True)
