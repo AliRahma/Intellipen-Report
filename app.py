@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
 import plotly.express as px
-from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str # Added _get_week_display_str
+from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str, extract_approver_name # Added _get_week_display_str
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen SmartQ",
+    page_title="Intellipen SmartQ Test",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -92,9 +92,6 @@ def set_custom_theme():
         width: 50px !important;
         min-width: 50px !important;
         max-width: 50px !important;
-    }
-    .st-ch {
-        font-size: 14px;
     }
     .action-button {
         background-color: #1976d2;
@@ -338,12 +335,21 @@ def load_data(file):
 
 # Function to process main dataframe
 def process_main_df(df):
+    # Drop duplicates based on 'Case Id', keeping the last occurrence
+    if 'Case Id' in df.columns:
+        initial_rows = len(df)
+        # Use inplace=False to return a new DataFrame, which is safer.
+        df = df.drop_duplicates(subset=['Case Id'], keep='last')
+        rows_dropped = initial_rows - len(df)
+        if rows_dropped > 0:
+            print(f"--- INFO: Dropped {rows_dropped} duplicate cases based on 'Case Id'. ---")
+
     # Ensure date columns are in datetime format
     date_columns = ['Case Start Date', 'Last Note Date']
     for col in date_columns:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], format="%d/%m/%Y", errors='coerce')
-    return df
+            # Use .loc to avoid SettingWithCopyWarning
+            df.loc[:, col] = pd.to_datetime(df[col], format="%d/%m/%Y", errors='coerce')
     
     # Extract all unique users
     if 'Current User Id' in df.columns:
@@ -363,8 +369,11 @@ def classify_and_extract(note):
         
     if match:
         ticket_num = int(match.group(2))
-        # SR numbers typically between 14000-18000 (adjust based on your system)
-        ticket_type = "SR" if 14000 <= ticket_num <= 19999 else "Incident"
+        ticket_keyword = match.group(1).lower()
+
+        sr_keywords = ['sr', 'مرجعي', 'اس ار']
+
+        ticket_type = "SR" if ticket_keyword in sr_keywords else "Incident"
         return "Pending SR/Incident", ticket_num, ticket_type
     
     return "Not Triaged", None, None
@@ -415,7 +424,7 @@ def generate_excel_download(data):
 with st.sidebar:
     # Display the logo
     st.image("Smart Q Logo.jpg", width=150)
-    st.title("📊 Intellipen SmartQ")
+    st.title("📊 Intellipen SmartQ Test")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
@@ -588,9 +597,9 @@ with st.sidebar:
 
 # Main content
 if not st.session_state.data_loaded:
-    st.title("📊 Intellipen SmartQ")
+    st.title("📊 Intellipen SmartQ Test")
     st.markdown("""
-    ### Welcome to the Intellipen SmartQ!
+    ### Welcome to the Intellipen SmartQ Test!
     
     This application helps you analyze Service Requests and Incidents efficiently.
     
@@ -617,13 +626,19 @@ else:
     else:
         df_filtered = df_main.copy()
     
-    # Apply date filter if date range is selected
-    if 'Case Start Date' in df_filtered.columns and 'date_range' in locals():
-        start_date, end_date = date_range
-        df_filtered = df_filtered[
-            (df_filtered['Case Start Date'].dt.date >= start_date) & 
-            (df_filtered['Case Start Date'].dt.date <= end_date)
-        ]
+    # Apply date filter if date range is selected and column exists
+    if 'date_range' in locals() and 'Case Start Date' in df_filtered.columns:
+        # Ensure date_range is a tuple of two dates
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+            # Additional check to ensure dates are not NaT or None
+            if pd.notna(start_date) and pd.notna(end_date):
+                # Ensure the 'Case Start Date' column is in datetime format before filtering
+                if pd.api.types.is_datetime64_any_dtype(df_filtered['Case Start Date']):
+                    df_filtered = df_filtered[
+                        (df_filtered['Case Start Date'].dt.date >= start_date) &
+                        (df_filtered['Case Start Date'].dt.date <= end_date)
+                    ]
     
     # Prepare tab interface
     selected = option_menu(
@@ -676,6 +691,7 @@ else:
         df_enriched['Status'] = None
         df_enriched['Last Update'] = None
         df_enriched['Breach Passed'] = None
+        df_enriched['Pending With'] = None
         
         # Ensure 'Ticket Number' is numeric before any merges
         if 'Ticket Number' in df_enriched.columns:
@@ -690,55 +706,40 @@ else:
                 sr_df_copy['Service Request'] = pd.to_numeric(sr_df_copy['Service Request'], errors='coerce')
                 sr_df_copy.dropna(subset=['Service Request'], inplace=True)
 
-                cols_to_merge_from_sr = ['Service Request']
-                sr_rename_for_merge = {}
+                # Proactively rename columns from the SR file to avoid suffix ambiguity
+                sr_cols_to_rename = {col: f"{col}_sr" for col in sr_df_copy.columns if col != 'Service Request'}
+                sr_df_copy.rename(columns=sr_cols_to_rename, inplace=True)
 
-                if 'Status' in sr_df_copy.columns:
-                    sr_rename_for_merge['Status'] = 'SR_Status_temp'
-                if 'LastModDateTime' in sr_df_copy.columns:
-                    sr_rename_for_merge['LastModDateTime'] = 'SR_Last_Update_temp'
-                if 'Breach Passed' in sr_df_copy.columns:
-                    sr_rename_for_merge['Breach Passed'] = 'SR_Breach_Value_temp'
-
-                sr_df_copy.rename(columns=sr_rename_for_merge, inplace=True)
-
-                for new_name in sr_rename_for_merge.values():
-                    if new_name not in cols_to_merge_from_sr:
-                        cols_to_merge_from_sr.append(new_name)
-
+                # Merge all columns from sr_df
                 df_enriched = df_enriched.merge(
-                    sr_df_copy[cols_to_merge_from_sr],
+                    sr_df_copy,
                     how='left',
                     left_on='Ticket Number',
-                    right_on='Service Request',
-                    suffixes=('', '_sr_merged')
+                    right_on='Service Request'
+                    # No suffix needed now as columns are pre-renamed
                 )
-
-                if 'Service Request_sr_merged' in df_enriched.columns:
-                    df_enriched.drop(columns=['Service Request_sr_merged'], inplace=True)
-                elif 'Service Request' in df_enriched.columns and 'Ticket Number' in df_enriched.columns and df_enriched.columns.tolist().count('Service Request') > 1:
-                     df_enriched.drop(columns=['Service Request'], errors='ignore', inplace=True)
 
                 sr_mask = df_enriched['Type'] == 'SR'
 
-                if 'SR_Status_temp' in df_enriched.columns:
-                    df_enriched.loc[sr_mask, 'Status'] = df_enriched.loc[sr_mask, 'SR_Status_temp']
-                    df_enriched.drop(columns=['SR_Status_temp'], inplace=True)
-                if 'SR_Last_Update_temp' in df_enriched.columns:
-                    df_enriched.loc[sr_mask, 'Last Update'] = df_enriched.loc[sr_mask, 'SR_Last_Update_temp']
-                    df_enriched.drop(columns=['SR_Last_Update_temp'], inplace=True)
+                # Populate unified columns from the suffixed SR columns
+                if 'Status_sr' in df_enriched.columns:
+                    df_enriched.loc[sr_mask, 'Status'] = df_enriched.loc[sr_mask, 'Status_sr']
+                if 'LastModDateTime_sr' in df_enriched.columns:
+                    df_enriched.loc[sr_mask, 'Last Update'] = df_enriched.loc[sr_mask, 'LastModDateTime_sr']
 
-                if 'SR_Breach_Value_temp' in df_enriched.columns:
+                if 'Breach Passed_sr' in df_enriched.columns:
                     def map_str_to_bool_sr(value):
                         if pd.isna(value): return None
                         val_lower = str(value).lower()
                         if val_lower in ['yes', 'true', '1', 'passed'] : return True
                         if val_lower in ['no', 'false', '0', 'failed']: return False
-                        return None # Default for unmapped strings
+                        return None
 
-                    mapped_values = df_enriched.loc[sr_mask, 'SR_Breach_Value_temp'].apply(map_str_to_bool_sr)
+                    mapped_values = df_enriched.loc[sr_mask, 'Breach Passed_sr'].apply(map_str_to_bool_sr)
                     df_enriched.loc[sr_mask, 'Breach Passed'] = mapped_values
-                    df_enriched.drop(columns=['SR_Breach_Value_temp'], inplace=True)
+
+                if 'Approval Pending with_sr' in df_enriched.columns:
+                    df_enriched.loc[sr_mask, 'Pending With'] = df_enriched.loc[sr_mask, 'Approval Pending with_sr'].apply(extract_approver_name)
 
         # Merge with Incident status data if available
         if hasattr(st.session_state, 'incident_df') and st.session_state.incident_df is not None:
@@ -963,6 +964,42 @@ else:
                     merged_status = pd.merge(status_all_counts, ticket_unique_counts, on='Status', how='outer').fillna(0)
                     merged_status[['Cases Count', 'SR Count']] = merged_status[['Cases Count', 'SR Count']].astype(int)
                     
+                    # New logic for breakdown
+                    new_rows = []
+                    for _, row in merged_status.iterrows():
+                        new_rows.append(row)
+                        # Use case-insensitive and whitespace-agnostic comparison
+                        if str(row['Status']).strip().lower() == 'waiting for approval':
+                            # Get the breakdown for this status
+                            srs_waiting = df_srs_status_valid[df_srs_status_valid['Status'].apply(lambda x: str(x).strip().lower() == 'waiting for approval')]
+
+                            if not srs_waiting.empty and 'Pending With' in srs_waiting.columns:
+                                # Breakdown for cases
+                                case_breakdown = srs_waiting['Pending With'].value_counts().reset_index()
+                                case_breakdown.columns = ['Pending With', 'Cases Count']
+
+                                # Breakdown for unique SRs
+                                sr_breakdown = srs_waiting.drop_duplicates(subset=['Ticket Number'])['Pending With'].value_counts().reset_index()
+                                sr_breakdown.columns = ['Pending With', 'SR Count']
+
+                                # Merge breakdowns
+                                final_breakdown = pd.merge(case_breakdown, sr_breakdown, on='Pending With', how='outer').fillna(0)
+
+                                for _, breakdown_row in final_breakdown.iterrows():
+                                    if pd.notna(breakdown_row['Pending With']):
+                                        new_row = {
+                                            'Status': f"    \u21b3 {breakdown_row['Pending With']}", # Indent with spaces and an arrow
+                                            'Cases Count': int(breakdown_row['Cases Count']),
+                                            'SR Count': int(breakdown_row['SR Count'])
+                                        }
+                                        new_rows.append(pd.Series(new_row))
+
+                    # Create the new summary dataframe
+                    if new_rows:
+                        status_summary_df_with_breakdown = pd.DataFrame(new_rows)
+                    else:
+                        status_summary_df_with_breakdown = merged_status.copy()
+
                     # Total row
                     total_row = {
                         'Status': 'Total',
@@ -970,9 +1007,9 @@ else:
                         'SR Count': merged_status['SR Count'].sum()
                     }
                     
-                    status_summary_df = pd.concat([merged_status, pd.DataFrame([total_row])], ignore_index=True)
+                    status_summary_df = pd.concat([status_summary_df_with_breakdown, pd.DataFrame([total_row])], ignore_index=True)
                     
-                    # Display
+                    # Display with original styling
                     st.dataframe(
                         status_summary_df.style.apply(
                             lambda x: ['background-color: #bbdefb; font-weight: bold' if x.name == len(status_summary_df)-1 else '' for _ in x],
@@ -1561,7 +1598,7 @@ else:
                 SELECT_ALL_TEAMS_OPTION = SELECT_ALL_BASE_STRING % "Teams"
 
                 # Define the desired default teams
-                default_teams_to_select = ["GPSSA App Team L1", "GPSSA App Team L3"]
+                default_teams_to_select = ["GPSSA App Team L1", "GPSSA App Team L3", "GPSSA PS Team L3"]
 
                 if 'incident_team_widget_selection_controlled' not in st.session_state:
                     # Filter desired default teams to only those present in unique_teams
@@ -2455,16 +2492,17 @@ else:
 
                         selected_closed_columns = st.multiselect(
                             "Select columns to display for Closed SRs:",
-                            options=all_closed_columns,
+                            options=all_columns,
                             default=st.session_state.closed_sr_data_cols_multiselect,
                             key="multiselect_closed_sr_data"
                         )
                         st.session_state.closed_sr_data_cols_multiselect = selected_closed_columns
 
+
                         if selected_closed_columns:
                             st.dataframe(filtered_closed_srs_df[selected_closed_columns], hide_index=True)
                         else:
-                            # Show all available (minus internal Year-Week) if no columns selected but data exists
+                            # Show all available (minus internal Year-Week) if no columns are selected but data exists
                             # Ensure we use the correct list of all_closed_columns (which has helpers removed)
                             st.dataframe(filtered_closed_srs_df[all_closed_columns] if all_closed_columns else filtered_closed_srs_df, hide_index=True)
 
@@ -2487,7 +2525,7 @@ else:
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ V4.0 | Developed by Ali Babiker | © July 2025
+    Intellipen SmartQ Test V4.0 | Developed by Ali Babiker | © July 2025
     </div>""",
     unsafe_allow_html=True
 )
