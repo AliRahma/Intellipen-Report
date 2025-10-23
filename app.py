@@ -13,7 +13,7 @@ from utils import calculate_team_status_summary, calculate_srs_created_per_week,
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen SmartQ Test",
+    page_title="Intellipen SmartQ",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -424,7 +424,7 @@ def generate_excel_download(data):
 with st.sidebar:
     # Display the logo
     st.image("Smart Q Logo.jpg", width=150)
-    st.title("📊 Intellipen SmartQ Test")
+    st.title("📊 Intellipen SmartQ")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
@@ -597,9 +597,9 @@ with st.sidebar:
 
 # Main content
 if not st.session_state.data_loaded:
-    st.title("📊 Intellipen SmartQ Test")
+    st.title("📊 Intellipen SmartQ")
     st.markdown("""
-    ### Welcome to the Intellipen SmartQ Test!
+    ### Welcome to the Intellipen SmartQ!
     
     This application helps you analyze Service Requests and Incidents efficiently.
     
@@ -2525,7 +2525,7 @@ else:
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ Test V4.0 | Developed by Ali Babiker | © July 2025
+    Intellipen SmartQ V4.0 | Developed by Ali Babiker | © July 2025
     </div>""",
     unsafe_allow_html=True
 )
