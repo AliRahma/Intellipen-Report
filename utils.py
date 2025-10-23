@@ -2,6 +2,7 @@ import pandas as pd
 import io
 from datetime import datetime, timedelta # Added timedelta
 import numpy as np
+import re
 
 # Function to classify and extract ticket info
 def classify_and_extract(note, ticket_regex, sr_min_range, sr_max_range):
@@ -141,6 +142,27 @@ def calculate_team_status_summary(df: pd.DataFrame) -> pd.DataFrame:
     else:
         summary_df = pd.DataFrame(columns=['Team', 'Status', 'Total Incidents'])
     return summary_df
+
+
+def extract_approver_name(text: str) -> str:
+    """
+    Extracts an approver's name from a string containing an email address.
+    e.g., "Status: Pending - with mohd.saqer@gpssa.gov.ae" -> "mohd saqer"
+    """
+    if not isinstance(text, str):
+        return None
+
+    # Regex to find an email address
+    match = re.search(r'([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
+
+    if match:
+        username = match.group(1)
+        # Replace dots with spaces
+        formatted_name = username.replace('.', ' ')
+        return formatted_name
+
+    return None
+
 
 def test_case_count_calculation_and_filtering():
     """Tests for Case Count calculation and linked cases filtering logic."""
@@ -1035,10 +1057,53 @@ def test_calculate_incidents_breached_per_week():
 
     print("All test_calculate_incidents_breached_per_week tests passed.")
 
+def test_extract_approver_name():
+    """Tests for the extract_approver_name function."""
+    print("Running test_extract_approver_name...")
+
+    # Test case 1: Standard email
+    text1 = "Status: Pending: Pending Pension Operation Head - with mohd.saqer@gpssa.gov.ae"
+    assert extract_approver_name(text1) == "mohd saqer"
+    print("  Test Case 1 (Standard email) Passed.")
+
+    # Test case 2: Email with no dots in username
+    text2 = "Pending with alibabiker@gpssa.gov.ae"
+    assert extract_approver_name(text2) == "alibabiker"
+    print("  Test Case 2 (Email with no dots) Passed.")
+
+    # Test case 3: No email in string
+    text3 = "Status: Closed"
+    assert extract_approver_name(text3) is None
+    print("  Test Case 3 (No email) Passed.")
+
+    # Test case 4: Empty string
+    text4 = ""
+    assert extract_approver_name(text4) is None
+    print("  Test Case 4 (Empty string) Passed.")
+
+    # Test case 5: None input
+    text5 = None
+    assert extract_approver_name(text5) is None
+    print("  Test Case 5 (None input) Passed.")
+
+    # Test case 6: Email at the beginning
+    text6 = "mohd.saqer@gpssa.gov.ae is the approver"
+    assert extract_approver_name(text6) == "mohd saqer"
+    print("  Test Case 6 (Email at beginning) Passed.")
+
+    # Test case 7: Multiple emails, should find the first one
+    text7 = "first one is a.b@x.com, second is c.d@y.com"
+    assert extract_approver_name(text7) == "a b"
+    print("  Test Case 7 (Multiple emails) Passed.")
+
+    print("All test_extract_approver_name tests passed.")
+
+
 if __name__ == '__main__':
     test_calculate_team_status_summary()
     test_case_count_calculation_and_filtering()
     test_calculate_srs_created_per_week()
     test_calculate_srs_created_and_closed_per_week()
     test_calculate_incidents_breached_per_week() # Correctly calling the test function
+    test_extract_approver_name()
     print("All utils.py tests passed successfully when run directly.")
