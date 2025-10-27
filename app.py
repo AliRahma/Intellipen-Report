@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
 import plotly.express as px
-from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str, extract_approver_name # Added _get_week_display_str
+from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str, extract_approver_name, calculate_daily_backlog_growth, calculate_breached_incidents_by_month, calculate_incident_status_summary_with_totals
 
 # Set page configuration
 st.set_page_config(
@@ -476,6 +476,9 @@ with st.sidebar:
                 overview_df = incident_df.copy()
                 if "Customer" in overview_df.columns:
                     overview_df.rename(columns={"Customer": "Creator"}, inplace=True)
+                elif "Creator" not in overview_df.columns:
+                    overview_df["Creator"] = "N/A" # Add a placeholder column if neither exists
+
                 # Attempt to parse 'Breach Date' right after loading incident_overview_df
                 if 'Breach Date' in overview_df.columns:
                     col_name = 'Breach Date'
@@ -643,8 +646,8 @@ else:
     # Prepare tab interface
     selected = option_menu(
         menu_title=None,
-        options=["Analysis", "SLA Breach", "Today's SR/Incidents", "Incident Overview", "SR Overview"],
-        icons=["kanban", "exclamation-triangle", "calendar-date", "clipboard-data", "bar-chart-line"],
+        options=["Analysis", "SLA Breach", "Today's SR/Incidents", "Incident Overview", "SR Overview", "Daily Meeting Report"],
+        icons=["kanban", "exclamation-triangle", "calendar-date", "clipboard-data", "bar-chart-line", "presentation-fill"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -1196,27 +1199,27 @@ else:
             case_details = {
                 "Field": ["Case ID", "Owner", "Start Date", "Age", "Ticket Number", "Type"],
                 "Value": [
-                    case_row['Case Id'],
-                    case_row['Current User Id'],
-                    case_row['Case Start Date'].strftime('%Y-%m-%d'),
+                    str(case_row['Case Id']),
+                    str(case_row['Current User Id']),
+                    str(case_row['Case Start Date'].strftime('%Y-%m-%d')),
                     f"{case_row['Age (Days)']} days",
-                    int(case_row['Ticket Number']) if not pd.isna(case_row['Ticket Number']) else 'N/A',
-                    case_row['Type'] if not pd.isna(case_row['Type']) else 'N/A'
+                    str(int(case_row['Ticket Number'])) if not pd.isna(case_row['Ticket Number']) else 'N/A',
+                    str(case_row['Type']) if not pd.isna(case_row['Type']) else 'N/A'
                 ]
             }
-            
+
             # Add Status if available
             if 'Status' in case_row and not pd.isna(case_row['Status']):
                 case_details["Field"].append("Status")
-                case_details["Value"].append(case_row['Status'])
-                
+                case_details["Value"].append(str(case_row['Status']))
+
                 if 'Last Update' in case_row and not pd.isna(case_row['Last Update']):
                     case_details["Field"].append("Last Update")
-                    case_details["Value"].append(case_row['Last Update'])
-                
+                    case_details["Value"].append(str(case_row['Last Update']))
+
                 if 'Breach Passed' in case_row:
                     case_details["Field"].append("SLA Breach")
-                    case_details["Value"].append("Yes ⚠️" if case_row['Breach Passed'] == True else "No")
+                    case_details["Value"].append("Yes ⚠️" if case_row['Breach Passed'] else "No")
             
             # Display as a table
             st.table(pd.DataFrame(case_details))
@@ -2521,11 +2524,157 @@ else:
                     else:
                         st.info("No Closed SR data to display based on current filters.")
 
+    elif selected == "Daily Meeting Report":
+        st.title("📅 Daily Meeting Report")
+
+        if 'incident_df' not in st.session_state or st.session_state.incident_df is None:
+            st.warning("Please upload the Incident Report Excel file to view this report.")
+        else:
+            incident_df = st.session_state.incident_df.copy()
+
+            # Team filter for this tab
+            if 'Team' in incident_df.columns:
+                all_teams = sorted(incident_df['Team'].dropna().unique())
+                default_teams = ["GPSSA App Team L1", "GPSSA PS Team L3"]
+
+                selected_teams = st.multiselect(
+                    "Filter by Team",
+                    options=all_teams,
+                    default=[team for team in default_teams if team in all_teams]
+                )
+
+                if selected_teams:
+                    incident_df = incident_df[incident_df['Team'].isin(selected_teams)]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.header("📈 Ivanti Daily Backlog Growth")
+                selected_date = st.date_input("Select a date", datetime.now().date())
+                if selected_date:
+                    backlog_growth_df = calculate_daily_backlog_growth(incident_df, selected_date)
+                    if not backlog_growth_df.empty:
+                        st.dataframe(
+                            backlog_growth_df.style.apply(
+                                lambda x: ['background-color: #bbdefb; font-weight: bold' if x.name == len(backlog_growth_df)-1 else '' for _ in x],
+                                axis=1
+                            )
+                        )
+                    else:
+                        st.info(f"No incidents created on {selected_date.strftime('%Y-%m-%d')}.")
+
+            with col2:
+                st.header("📋 Detailed Incidents")
+                if selected_date:
+                    detailed_incidents_df = incident_df[pd.to_datetime(incident_df['Created On'], errors='coerce').dt.date == selected_date]
+                    if not detailed_incidents_df.empty:
+                        all_columns = detailed_incidents_df.columns.tolist()
+                        selected_columns = st.multiselect("Select columns to display", all_columns, default=("Incident","Source","Team","Status","Priority"))
+                        st.dataframe(detailed_incidents_df[selected_columns])
+                    else:
+                        st.info("No detailed incidents to display.")
+
+            st.markdown("---")
+            col3, col4 = st.columns(2)
+
+            with col3:
+                st.header("🔥 Breached Incidents")
+                breached_by_month_df = calculate_breached_incidents_by_month(incident_df)
+                if not breached_by_month_df.empty:
+                    st.dataframe(
+                        breached_by_month_df.style.apply(
+                            lambda x: ['background-color: #bbdefb; font-weight: bold' if x.name == len(breached_by_month_df)-1 else '' for _ in x],
+                            axis=1
+                        )
+                    )
+                else:
+                    st.info("No open breached incidents found.")
+
+            with col4:
+                st.header("📋 Detailed Breached Incidents")
+                open_statuses = ['Open', 'In Progress', 'Pending', 'New','Waiting for Information - DIT','Waiting for Verification','Ready for deployment','Waiting for Deployment','Waiting for Verification – DIT','Waiting for Information - Business','Resolved']
+                if 'Breach Passed' in incident_df.columns and 'Status' in incident_df.columns:
+                    def map_breach_status(status):
+                        if isinstance(status, str):
+                            return 'yes' in status.lower() or 'passed' in status.lower()
+                        return bool(status)
+
+                    incident_df['Is Breached'] = incident_df['Breach Passed'].apply(map_breach_status)
+                    detailed_breached_df = incident_df[(incident_df['Is Breached']) & (incident_df['Status'].isin(open_statuses))]
+                    if not detailed_breached_df.empty:
+                        all_columns = detailed_breached_df.columns.tolist()
+                        selected_columns = st.multiselect("Select columns to display", all_columns, default=("Breach Date","Incident","Source","Team","Status","Priority"))
+                        st.dataframe(detailed_breached_df[selected_columns])
+                    else:
+                        st.info("No detailed breached incidents to display.")
+
+            st.header("📊 Incidents Status")
+            active_incidents = incident_df[~incident_df['Status'].isin(['Closed', 'Cancelled'])]
+            if 'Team' in active_incidents.columns:
+                teams = sorted(active_incidents['Team'].dropna().unique())
+
+                if teams:
+                    cols = st.columns(len(teams))
+                    for i, team in enumerate(teams):
+                        with cols[i]:
+                            st.subheader(f"Status for {team}")
+                            team_df = active_incidents[active_incidents['Team'] == team]
+
+                            if not team_df.empty:
+                                status_summary = team_df['Status'].value_counts().reset_index()
+                                status_summary.columns = ['Status', 'Count']
+
+                                # Add a 'Total' row
+                                total_row = pd.DataFrame([{'Status': 'Total', 'Count': status_summary['Count'].sum()}])
+                                status_summary_with_total = pd.concat([status_summary, total_row], ignore_index=True)
+
+                                st.dataframe(
+                                    status_summary_with_total.style.apply(
+                                        lambda x: ['background-color: #bbdefb; font-weight: bold' if x.name == len(status_summary_with_total)-1 else '' for _ in x],
+                                        axis=1
+                                    )
+                                )
+                            else:
+                                st.info(f"No active incidents to display for {team}.")
+            else:
+                # Fallback for if 'Team' column doesn't exist
+                status_pivot_df = calculate_incident_status_summary_with_totals(incident_df)
+                if not status_pivot_df.empty:
+                    st.dataframe(status_pivot_df)
+                else:
+                    st.info("No incident status data to display.")
+
+            st.markdown("---")
+            st.header("📋 Filtered Incident Details")
+
+            # Filter out closed and cancelled incidents for this table
+            active_incident_details_df = incident_df[~incident_df['Status'].isin(['Closed', 'Cancelled'])]
+
+            if not active_incident_details_df.empty:
+                all_columns = active_incident_details_df.columns.tolist()
+                default_cols = ["Incident", "Creator", "Team", "Priority", "Status"]
+
+                # Ensure default columns exist in the dataframe
+                default_selected_cols = [col for col in default_cols if col in all_columns]
+
+                selected_display_cols = st.multiselect(
+                    "Select columns to display:",
+                    options=all_columns,
+                    default=default_selected_cols,
+                    key="daily_meeting_incident_details_multiselect"
+                )
+
+                if selected_display_cols:
+                    st.dataframe(active_incident_details_df[selected_display_cols], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Please select at least one column to display.")
+            else:
+                st.info("No active incidents to display based on the current filters.")
 
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ V4.0 | Developed by Ali Babiker | © July 2025
+    Intellipen SmartQ V4.5 | Developed by Ali Babiker | © OCT 2025
     </div>""",
     unsafe_allow_html=True
 )
