@@ -137,6 +137,9 @@ def calculate_team_status_summary(df: pd.DataFrame) -> pd.DataFrame:
         summarizing the count of incidents. Returns an empty DataFrame
         with these columns if 'Team' or 'Status' is missing in the input.
     """
+    if df.empty:
+        return pd.DataFrame(columns=['Team', 'Status', 'Total Incidents'])
+
     if 'Team' in df.columns and 'Status' in df.columns:
         summary_df = df.groupby(['Team', 'Status']).size().reset_index(name='Total Incidents')
     else:
@@ -1056,6 +1059,58 @@ def test_calculate_incidents_breached_per_week():
 
 
     print("All test_calculate_incidents_breached_per_week tests passed.")
+
+def calculate_daily_backlog_growth(df, selected_date):
+    if 'Created On' in df.columns and 'Source' in df.columns:
+        df['Created On'] = pd.to_datetime(df['Created On'], errors='coerce')
+        daily_backlog = df[df['Created On'].dt.date == selected_date]
+        if not daily_backlog.empty:
+            backlog_counts = daily_backlog.groupby('Source').size().reset_index(name='Count')
+            total_row = pd.DataFrame([{'Source': 'Total', 'Count': backlog_counts['Count'].sum()}])
+            return pd.concat([backlog_counts, total_row], ignore_index=True)
+    return pd.DataFrame(columns=['Source', 'Count'])
+
+def calculate_breached_incidents_by_month(df):
+    if 'Breach Date' in df.columns and 'Status' in df.columns and 'Breach Passed' in df.columns:
+        open_statuses = ['Open', 'In Progress', 'Pending', 'New','Waiting for Information - DIT','Waiting for Verification','Ready for deployment','Waiting for Deployment','Waiting for Verification – DIT','Waiting for Information - Business','Resolved']
+        def map_breach_status(status):
+            if isinstance(status, str):
+                return 'yes' in status.lower() or 'passed' in status.lower()
+            return bool(status)
+
+        df['Is Breached'] = df['Breach Passed'].apply(map_breach_status)
+
+        open_breached_incidents = df[(df['Is Breached']) & (df['Status'].isin(open_statuses))].copy()
+
+        if not open_breached_incidents.empty:
+            open_breached_incidents['Breach Date'] = pd.to_datetime(open_breached_incidents['Breach Date'], errors='coerce')
+            open_breached_incidents.dropna(subset=['Breach Date'], inplace=True)
+            if not open_breached_incidents.empty:
+                open_breached_incidents['Month'] = open_breached_incidents['Breach Date'].dt.to_period('M')
+                breached_by_month = open_breached_incidents.groupby('Month').size().reset_index(name='Count')
+                breached_by_month['Month'] = breached_by_month['Month'].astype(str)
+                total_row = pd.DataFrame([{'Month': 'Total', 'Count': breached_by_month['Count'].sum()}])
+                return pd.concat([breached_by_month, total_row], ignore_index=True)
+    return pd.DataFrame(columns=['Month', 'Count'])
+
+def calculate_incident_status_summary_with_totals(df):
+    if 'Team' in df.columns and 'Status' in df.columns:
+        # Exclude 'Closed' and 'Cancelled' statuses
+        active_incidents = df[~df['Status'].isin(['Closed', 'Cancelled'])]
+        team_status_summary_df = calculate_team_status_summary(active_incidents)
+        if not team_status_summary_df.empty:
+            status_pivot = pd.pivot_table(
+                team_status_summary_df,
+                values='Total Incidents',
+                index='Status',
+                columns='Team',
+                aggfunc='sum',
+                fill_value=0,
+                margins=True,
+                margins_name='Total'
+            )
+            return status_pivot
+    return pd.DataFrame()
 
 def test_extract_approver_name():
     """Tests for the extract_approver_name function."""
