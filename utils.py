@@ -1154,6 +1154,26 @@ def test_extract_approver_name():
     print("All test_extract_approver_name tests passed.")
 
 
+def calculate_team_progress(df, start_date, end_date, members):
+    if 'Last Checked at' in df.columns and 'Last Check By' in df.columns:
+        df['Last Checked at'] = pd.to_datetime(df['Last Checked at'], errors='coerce')
+
+        # Filter by date
+        mask = (df['Last Checked at'].dt.date >= start_date) & (df['Last Checked at'].dt.date <= end_date)
+        filtered_df = df.loc[mask]
+
+        # Filter by members
+        if members:
+            filtered_df = filtered_df[filtered_df['Last Check By'].isin(members)]
+
+        if not filtered_df.empty:
+            progress_counts = filtered_df.groupby('Last Check By').size().reset_index(name='Ivanti Incidents')
+            total_row = pd.DataFrame([{'Last Check By': 'Total', 'Ivanti Incidents': progress_counts['Ivanti Incidents'].sum()}])
+            return pd.concat([progress_counts, total_row], ignore_index=True)
+
+    return pd.DataFrame(columns=['Last Check By', 'Ivanti Incidents'])
+
+
 if __name__ == '__main__':
     test_calculate_team_status_summary()
     test_case_count_calculation_and_filtering()
