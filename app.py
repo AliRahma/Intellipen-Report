@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 import pytz
 from streamlit_option_menu import option_menu
 import plotly.express as px
-from utils import calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str, extract_approver_name, calculate_daily_backlog_growth, calculate_breached_incidents_by_month, calculate_incident_status_summary_with_totals
+from utils import calculate_team_progress,calculate_team_status_summary, calculate_srs_created_per_week, _get_week_display_str, extract_approver_name, calculate_daily_backlog_growth, calculate_breached_incidents_by_month, calculate_incident_status_summary_with_totals
 
 # Set page configuration
 st.set_page_config(
-    page_title="Intellipen SmartQ",
+    page_title="Intellipen SmartQ Test",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -365,13 +365,13 @@ def classify_and_extract(note):
     
     note_lower = note.lower()
     # Enhanced regex pattern to catch more variations
-    match = re.search(r'(tkt|sr|inc|ticket|مرجعي|incident|اس ار|انسدنت)[\s\S]{0,50}?(\d{4,})', note_lower)
+    match = re.search(r'(tkt|sr|inc|ticket|مرجعي|incident|اس ار|انسدنت|application)[\s\S]{0,50}?(\d{4,})', note_lower)
         
     if match:
         ticket_num = int(match.group(2))
         ticket_keyword = match.group(1).lower()
 
-        sr_keywords = ['sr', 'مرجعي', 'اس ار']
+        sr_keywords = ['sr', 'مرجعي', 'اس ار','Request','application']
 
         ticket_type = "SR" if ticket_keyword in sr_keywords else "Incident"
         return "Pending SR/Incident", ticket_num, ticket_type
@@ -424,7 +424,7 @@ def generate_excel_download(data):
 with st.sidebar:
     # Display the logo
     st.image("Smart Q Logo.jpg", width=150)
-    st.title("📊 Intellipen SmartQ")
+    st.title("📊 Intellipen SmartQ Test")
     st.markdown("---")
 
     st.subheader("📁 Data Import")
@@ -600,9 +600,9 @@ with st.sidebar:
 
 # Main content
 if not st.session_state.data_loaded:
-    st.title("📊 Intellipen SmartQ")
+    st.title("📊 Intellipen SmartQ Test")
     st.markdown("""
-    ### Welcome to the Intellipen SmartQ!
+    ### Welcome to the Intellipen SmartQ Test!
     
     This application helps you analyze Service Requests and Incidents efficiently.
     
@@ -2671,10 +2671,74 @@ else:
             else:
                 st.info("No active incidents to display based on the current filters.")
 
+            st.markdown("---")
+            st.header("Team Progress")
+
+            team_progress_col1, team_progress_col2 = st.columns(2)
+
+            with team_progress_col1:
+                prog_start_date = st.date_input("Start date", datetime.now().date() - timedelta(days=7))
+
+            with team_progress_col2:
+                prog_end_date = st.date_input("End date", datetime.now().date())
+
+            if 'Last Check By' in incident_df.columns:
+                all_members = sorted(incident_df['Last Check By'].dropna().unique())
+                default_members = ["Anas Hasan  Alrefai", "Alharith Saad Alfki", "Ali Rahamtalla Ali Babiker", "Hadeel Salah Hmdnallah"]
+
+                selected_members = st.multiselect(
+                    "Select Members",
+                    options=all_members,
+                    default=[member for member in default_members if member in all_members]
+                )
+
+                if prog_start_date and prog_end_date:
+                    team_progress_df = calculate_team_progress(incident_df, prog_start_date, prog_end_date, selected_members)
+                    if not team_progress_df.empty:
+                        # Separate the total row from the data rows
+                        total_row = team_progress_df[team_progress_df['Last Check By'] == 'Total']
+                        data_rows = team_progress_df[team_progress_df['Last Check By'] != 'Total']
+
+                        # Add 'Intellipen Cases' column to data rows, initialized with 0
+                        data_rows['Intellipen Cases'] = 0
+
+                        # Display the editable dataframe for data rows
+                        st.write("Edit Intellipen Cases:")
+                        edited_df = st.data_editor(data_rows)
+
+                        if edited_df is not None:
+                            # Calculate the 'Total' column
+                            edited_df['Total'] = edited_df['Ivanti Incidents'] + edited_df['Intellipen Cases']
+
+                            # Recalculate the 'Total' row
+                            total_ivanti = edited_df['Ivanti Incidents'].sum()
+                            total_intellipen = edited_df['Intellipen Cases'].sum()
+                            total_total = edited_df['Total'].sum()
+
+                            new_total_row = pd.DataFrame([{
+                                'Last Check By': 'Total',
+                                'Ivanti Incidents': total_ivanti,
+                                'Intellipen Cases': total_intellipen,
+                                'Total': total_total
+                            }])
+
+                            # Combine edited data with the new total row
+                            final_df = pd.concat([edited_df, new_total_row], ignore_index=True)
+
+                            # Display the final dataframe with styling
+                            st.dataframe(
+                                final_df.style.apply(
+                                    lambda x: ['background-color: #bbdefb; font-weight: bold' if x.name == len(final_df)-1 else '' for _ in x],
+                                    axis=1
+                                )
+                            )
+                    else:
+                        st.info("No team progress data to display for the selected date range and members.")
+
 st.markdown("---")
 st.markdown(
     """<div style="text-align:center; color:#888; font-size:0.8em;">
-    Intellipen SmartQ V4.5 | Developed by Ali Babiker | © OCT 2025
+    Intellipen SmartQ Test V4.5 | Developed by Ali Babiker | © July 2025
     </div>""",
     unsafe_allow_html=True
 )
